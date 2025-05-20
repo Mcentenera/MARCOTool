@@ -1,8 +1,3 @@
 numpy
-<<<<<<< HEAD
 pandas
 matplotlib
-=======
-matplotlib
-pandas
->>>>>>> 717e0c8 (Initial commit)
