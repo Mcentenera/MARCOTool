@@ -1,0 +1,2 @@
+# Core_size(um) eCore_size(um) NA eNA Cost(€/m)
+25.0 3.0 0.1 0.015 31.78

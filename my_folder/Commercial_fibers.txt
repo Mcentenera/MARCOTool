@@ -1,0 +1,22 @@
+# Core_size(um) eCore_size(um) 	NA 	eNA 	Cost(€/m)	Company
+10  		3		0.10	0.015	22.41		Thorlabs
+25 		3		0.10	0.015	31.78		Thorlabs
+50		1		0.22	0.02	5.29		Thorlabs
+105 		3		0.10	0.015	3.78		Thorlabs
+105		3		0.22	0.02	3.42		Thorlabs
+200		4		0.22	0.02	9.02		Thorlabs
+200		5		0.39	0	1.78		Thorlabs
+200		5		0.50	0	2.13		Thorlabs
+300		6		0.39	0	2.7		Thorlabs
+400		8		0.22	0.02	25.62		Thorlabs
+400		8		0.39	0	4.49		Thorlabs
+400		8		0.50	0	5.95		Thorlabs
+600		12		0.22	0.02	58.52		Thorlabs
+600		10		0.39	0	9.36		Thorlabs
+600		10		0.50	0	11.49		Thorlabs
+800		10		0.39	0	17.55		Thorlabs
+1000		30		0.22	0.02	119.05		Thorlabs
+1000		15		0.39	0	29.76		Thorlabs
+1000		15		0.50	0	30.90		Thorlabs
+1500		30		0.39	0	119.02		Thorlabs
+1500		30		0.50	0	118.93		Thorlabs
