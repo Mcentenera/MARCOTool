@@ -1,0 +1,9 @@
+# Diameter(mm) 	f_number	Focal_length(mm)	Tube_Diameter(mm)	Tube_length(mm)		Weight(kg)	Cost(€/m)	Company
+406  	8	3250	565	1124	37	7790	Teleskop
+508	8	4000	630	1360	55	14990	Teleskop
+600	8	4800	0	0	0	53900	Teleskop
+600	8	4800	0	0	138	69400	Astroshop
+700	8	5600	0	0	140	84170	Astroshop
+800	8	6400	0	0	180	188900	Astroshop
+1000	6	6000	3429	1829	1179	575000	PlaneWave
+
