@@ -2,7 +2,7 @@
 A pipeline for telescope, photonic lantern and instrument design
 
 
-## Installation instrction
+## Installation instruction
 
 Requirements:
 
