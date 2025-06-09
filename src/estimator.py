@@ -8,12 +8,9 @@ import pandas as pd
 def marcot_hr_estimator(
     module_diameter_m = 5,
     ota_diameter_m = 0.406,
-    f_number_ota = 8,
     seeing_fwhm_arcsec = 0.85,
     use_tip_tilt = False,
     target_encircled_energy = 0.95,
-    NA_in = 0.1,
-    NA_out = 0.22,
     wavelength_min_nm = 500,
     wavelength_max_nm = 1000,
     magnification_factor = 1.2,
@@ -25,18 +22,48 @@ def marcot_hr_estimator(
     # 1. TELESCOPE MODULE
     #########################################################################
 
+    com_ota_diam_mm, com_ota_f_number, com_ota_focal_length_mm, com_ota_tube_diam_mm, com_ota_tube_length_mm, com_ota_weight, com_ota_cost = np.loadtxt("data/Commercial_OTA.txt", usecols=(0, 1, 2, 3, 4, 5, 6),unpack=True)
+    archive = open("data/Com_ota_choosen.txt", "w")
+    
+    for i in com_ota_diam_mm:
+        if i >= ota_diameter_m * 1000:
+            first_commercial = i
+        break
+        
+    for i in range(0, len(com_ota_diam_mm)):
+        if i == 0:
+            archive.write(f'# Diameter(mm) f_number Focal_length(mm) Tube_Diameter(mm) Tube_length(mm) Weight(kg) Cost(€/u)\n')
+        if com_ota_diam_mm[i] == first_commercial:
+            archive.write(f'{com_ota_diam_mm[i]} {com_ota_f_number[i]} {com_ota_focal_length_mm[i]} {com_ota_tube_diam_mm[i]} {com_ota_tube_length_mm[i]} {com_ota_weight[i]} {com_ota_cost[i]}\n')
+            
+    archive.close()
+    
+    df = pd.read_csv("data/Com_ota_choosen.txt", sep="\t")
+
+    df.to_csv("data/Com_ota_choosen.txt", sep="\t", index=False)
+    
+    com_ota_diam_mm, com_ota_f_number, com_ota_focal_length_mm, com_ota_tube_diam_mm, com_ota_tube_length_mm, com_ota_weight, com_ota_cost = np.loadtxt("data/Com_ota_choosen.txt", usecols=(0, 1, 2, 3, 4, 5, 6),unpack=True)
+
     module_area = math.pi * (module_diameter_m / 2)**2
-    ota_area = math.pi * (ota_diameter_m / 2)**2
+    ota_area = math.pi * (com_ota_diam_mm * 1e-3 / 2)**2
     n_otas = math.ceil(module_area / ota_area)
 
-    ota_diameter_mm = ota_diameter_m * 1000
-    focal_length_mm = f_number_ota * ota_diameter_mm
-    plate_scale_arcsec_per_mm = 206265 / focal_length_mm
+    plate_scale_arcsec_per_mm = 206265 / com_ota_focal_length_mm
 
     effective_seeing_arcsec = seeing_fwhm_arcsec * (0.7 if use_tip_tilt else 1.0)
     psf_fwhm_mm = effective_seeing_arcsec / plate_scale_arcsec_per_mm
     fiber_core_mm = 1.5 * psf_fwhm_mm  # 1.5xFWHM to capture 90–95% energy
     fiber_core_microns = fiber_core_mm * 1000
+    
+    com_ota_weight, com_ota_cost = np.loadtxt("data/Com_ota_choosen.txt", usecols=(5,6),unpack=True)
+    
+    cost_tel = n_otas * com_ota_cost
+    
+    cost_trad = 2.37 * ( module_diameter_m ** 1.96 ) # Equation to estimated cost of a telescope with the same diamter with traditional design
+    
+    frac_cost = cost_trad / ( cost_tel / 1e6 )
+    
+    weight_tel = n_otas * (com_ota_weight + 10) # We sum 10 kg considering post-focus intrumentation
 
     #########################################################################
     # 2. PHOTONIC LANTERN
@@ -102,8 +129,7 @@ def marcot_hr_estimator(
 
     com_core_out, e_com_core_out, com_NA_out, e_com_NA_out, cost_eur_m_out = np.loadtxt("data/Com_fiber_out.txt", usecols=(0, 1, 2, 3, 4),unpack=True)
 
-    # loss_comm = 10 * np.log10( n_otas * modes(wavelength_min_nm * 1e-9, fiber_core_m, NA_in) / modes(wavelength_min_nm * 1e-9, fiber_core_output_microns * 1e-6, NA_out))
-    loss_comm = 10 * np.log10( n_otas * modes(wavelength_min_nm * 1e-9, fiber_core_m, NA_in) / modes(wavelength_min_nm * 1e-9, com_core_out * 1e-6, com_NA_out))
+    loss_comm = 10 * np.log10( n_otas * modes(wavelength_min_nm * 1e-9, fiber_core_m, com_NA_in) / modes(wavelength_min_nm * 1e-9, com_core_out * 1e-6, com_NA_out))
     efficiency_comm = 1 - 10 ** (loss_comm / 10)
 
     # Force output of 100 microns (como CARMENES)
@@ -125,6 +151,11 @@ def marcot_hr_estimator(
     else:
         total_fibers_pseudoslit = total_modules * fibers_per_module_output
 
+    cost_eur_m_in = np.loadtxt("data/Com_fiber_in.txt", usecols=(4),unpack=True)
+    cost_eur_m_out = np.loadtxt("data/Com_fiber_out.txt", usecols=(4),unpack=True)
+        
+    cost_pl = n_otas * 2 * cost_eur_m_in + 3 * cost_eur_m_out
+    
     #########################################################################
     # 3. SPECTROGRAPH / INSTRUMENT
     #########################################################################
@@ -173,20 +204,24 @@ def marcot_hr_estimator(
     results = {
         # Telescope
         "Module diameter (m)": module_diameter_m,
-        "OTA diameter (m)": ota_diameter_m,
+        "OTA diameter (m)": com_ota_diam_mm * 1e-3,
         "Number of OTAs": n_otas,
-        "F-number OTA": f_number_ota,
-        "Focal length (mm)": focal_length_mm,
+        "F-number OTA": com_ota_f_number,
+        "Focal length (mm)": com_ota_focal_length_mm,
         "Seeing FWHM (arcsec)": seeing_fwhm_arcsec,
         "Effective seeing (arcsec)": effective_seeing_arcsec if use_tip_tilt else seeing_fwhm_arcsec,
         "Input fiber core (microns)": np.round(fiber_core_microns,3),
         "Selected commercial input core (microns)": np.round(com_core_in, 3),
-        "Selected commercial output NA": np.round(com_NA_in, 3),
+        "Selected commercial input NA": np.round(com_NA_in, 3),
+        "Total cost for each module (MEUR)": np.round(cost_tel * 1e-6, 3),
+        "Total cost (MEUR)": np.round((cost_tel * total_modules) * 1e-6, 3),
+        "Reduction cost factor": np.round(frac_cost, 3),
+        "Weight supported by the mount (kg)": np.round(weight_tel, 3),
 
         # Photonic Lantern
         "": None,
-        "Modes per fiber [500nm,1000nm]": np.array([np.round(modes(wavelength_min_nm * 1e-9, fiber_core_m, NA_in), 0),np.round(modes(wavelength_max_nm * 1e-9, fiber_core_m, NA_in), 0)]),
-        "Total modes per module": np.array([np.round(n_otas * modes(wavelength_min_nm * 1e-9, fiber_core_m, NA_in), 0), np.round(n_otas * modes(wavelength_min_nm * 1e-9, fiber_core_m, NA_in), 0)]),
+        "Modes per fiber [500nm,1000nm]": np.array([np.round(modes(wavelength_min_nm * 1e-9, fiber_core_m, com_NA_in), 0),np.round(modes(wavelength_max_nm * 1e-9, fiber_core_m, com_NA_in), 0)]),
+        "Total modes per module": np.array([np.round(n_otas * modes(wavelength_min_nm * 1e-9, fiber_core_m, com_NA_in), 0), np.round(n_otas * modes(wavelength_min_nm * 1e-9, fiber_core_m, com_NA_in), 0)]),
         "Required output fiber core (microns)": np.round(core_required_microns,3),
         "Selected commercial output core (microns)": np.round(com_core_out, 3),
         "Selected commercil output NA": np.round(com_NA_out, 3),
@@ -195,6 +230,7 @@ def marcot_hr_estimator(
         # "Modes per 100µm fiber": math.ceil(modes_per_each_100_micron_fiber),
         "Total modules": total_modules,
         "Total fibers at pseudorendija": total_fibers_pseudoslit,
+        "Total cost PLs (MEUR)": np.round((cost_pl * total_modules) * 1e-6, 3),
 
         # Spectrograph
         "": None,
@@ -215,6 +251,6 @@ def marcot_hr_estimator(
         "Pseudoslit": pseudoslit,
         "Super-PL": super_pl
     }
-    return results
+    return results, module_diameter_m, com_core_out * 1e-3
         
 
