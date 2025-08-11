@@ -1,9 +1,13 @@
 # Core_size(um) eCore_size(um) 	NA 	eNA 	Cost(€/m)	Company
 10  		3		0.10	0.015	22.41		Thorlabs
 25 		3		0.10	0.015	31.78		Thorlabs
+25		0		0.12	0.02	0.5		CeramOptec
+50		0		0.12	0.02	0.5		CeramOptec
 50		1		0.22	0.02	5.29		Thorlabs
 105 		3		0.10	0.015	3.78		Thorlabs
+100		0		0.12	0.02	0.5		CeramOptec
 105		3		0.22	0.02	3.42		Thorlabs
+200		0		0.12	0.02	0.5		CeramOptec
 200		4		0.22	0.02	9.02		Thorlabs
 200		5		0.39	0	1.78		Thorlabs
 200		5		0.50	0	2.13		Thorlabs
