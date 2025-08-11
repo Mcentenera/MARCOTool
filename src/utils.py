@@ -1,8 +1,11 @@
 import pandas as pd
 import numpy as np
 from scipy.integrate import quad
+import matplotlib.pyplot as plt
+import ast
+import re
 
-def print_results(results, module_diameter_m, com_core_out_mm):
+def print_results(results):
     def print_section(title):
         print(f"\n{'=' * 60}\n{title:^60}\n{'=' * 60}")
 
@@ -25,48 +28,158 @@ def print_results(results, module_diameter_m, com_core_out_mm):
     other_keys = [k for k in results if k not in keys_tel + keys_pl + keys_instr and k != ""]
     for k in other_keys:
         print(f"{k:<45}: {results[k]}")
-    
-    print_section("SCIENTIFIC CRITERIA")
-    fraction = snr_cal(module_diameter_m, 0.9, com_core_out_mm )
-    # HAY QUE DEFINIR UN VALOR MÁS REALISTA DE LA EFICIENCIA DEL SISTEMA DE MARCOT Y NO PONER UN 0.9 POR DEFECTO.
-    
-    # HAY QUE CAMBIAR EL module_diameter_m, POR PARÁMETROS n_otas Y diameter_ota_m PARA QUE CALCULA LA APERTURA EFECTIVA
-    
-    print(f"MARCOT telescope has a {np.round(fraction, 3)} * SNR in comparison to a traditional design")
 
 def multi_criteria(archive):
+    df = pd.read_csv('data/results_marcot.csv', sep='\t')
 
-    # Import results from estimator.py
-    df = pd.DataFrame('data/results_marcot.txt')
-
-    # Define criteria
     criterios = {
-    "Expected efficiency": 0.9,
-    "Estimated cost": 0.9,
-    "Resolution": 0.8,
-    "Total fibers": 0.2,
-    "Spectrograph volume": 0.5
+        "Expected efficiency (%)": 0.9,
+        "Cost telescope + PL (MEUR)": 0.5,
+        "Total modules": 0,
+        "Resolution with commercial fibers": 0.8,
+        "Number of OTA for high efficiency": 0.2,
+        "Spectrograph volume (m³)": 0.5,
+        "SNR fraction": 0.9,
+        "OTA diameter (m)": 0,
+        "Recalculated module diameter (m)": 0,
+        "Recalculated telescope aperture (m)": 0
     }
+
+    more = ["Expected efficiency (%)", "Resolution with commercial fibers", "SNR fraction", "Recalculated telescope aperture (m)"]
+    less = ["Cost telescope + PL (MEUR)", "Total modules" ,"Number of OTAs", "Spectrograph volume (m³)"]
+
+    # Just necesary columns
+    missing_cols = [col for col in criterios if col not in df.columns]
+    if missing_cols:
+        print(f'\033[4;93;1mWARNING: Missing columns: {missing_cols}\033[0m')
+        return None
+
+    # Pass from list to array
+    list_columns = [col for col in df.columns if df[col].dtype == object and df[col].astype(str).str.startswith('[').any()]
     
-    # Divide in groups more is better or less is better
-    more = ["Expected efficiency", "Resolution"]
-    less = ["Estimated cost", "Total fibers", "Spectrograph volume"]
-    
-    # Calculated normalized value
+    for col in list_columns:
+        try:
+            def parse_array(x):
+                if not isinstance(x, str) or not re.search(r'\d', x):
+                    return x
+                x = x.strip("[] \n\t")
+                return np.fromstring(x, sep=' ')
+            df[col] = df[col].apply(parse_array)
+        except Exception as e:
+            print(f'\033[4;93;1mWARNING: Error in column {col}: {str(e)}\033[0m')
+            return None
+
     for criterio in criterios:
-        if criterio in more:
-            df[criterio + "_norm"] = (df[criterio] - df[criterio].min()) / (df[criterio].max() - df[criterio].min())
+        col_data = df[criterio]
+
+    # Check if we have any array at the column
+        has_array = col_data.apply(lambda x: isinstance(x, (list, np.ndarray))).any()
+
+        if has_array:
+        # Flatten arrays to calculate global min and max
+            try:
+                all_values = np.concatenate(col_data.apply(lambda x: np.array(x) if isinstance(x, (list, np.ndarray)) else np.array([x])))
+                vmin, vmax = np.min(all_values), np.max(all_values)
+
+                if vmax == vmin:
+                    print(f"\033[4;93;1mWARNING: The criteria '{criterio}' has constant values. Normalization not applicable\033[0m")
+                    df[criterio + "_norm"] = col_data.apply(lambda x: np.zeros_like(x) if isinstance(x, (list, np.ndarray)) else 0)
+                elif criterio in more:
+                    df[criterio + "_norm"] = col_data.apply(lambda x: (np.array(x) - vmin) / (vmax - vmin) if isinstance(x, (list, np.ndarray)) else (x - vmin) / (vmax - vmin))
+                else:
+                    df[criterio + "_norm"] = col_data.apply(lambda x: (vmax - np.array(x)) / (vmax - vmin) if isinstance(x, (list, np.ndarray)) else (vmax - x) / (vmax - vmin))
+            except Exception as e:
+                print(f"\033[4;93;1mWARNING: Error normalizing {criterio}: {e}\033[0m")
+                df[criterio + "_norm"] = 0
+
         else:
-            df[criterio + "_norm"] = (df[criterio].max() - df[criterio]) / (df[criterio].max() - df[criterio].min())
+        # Scalar values only
+            vmin, vmax = col_data.min(), col_data.max()
+
+            if vmax == vmin:
+                print(f"\033[4;93;1mWARNING: The criteria '{criterio}' has constant values. Normalization not applicable\033[0m")
+                df[criterio + "_norm"] = 0
+            elif criterio in more:
+                df[criterio + "_norm"] = (col_data - vmin) / (vmax - vmin)
+            else:
+                df[criterio + "_norm"] = (vmax - col_data) / (vmax - vmin)
+
+    # Calculate score total
+    df["score_total"] = df[[c + "_norm" for c in criterios]].apply(
+    lambda row: sum(row[c + "_norm"] * criterios[c] for c in criterios),
+    axis=1)
+    
+    
+    df_sorted = df.sort_values(by="score_total", ascending=False)
+    
+    df_sorted.to_csv("data/score_total.csv", sep = '\t', index = False)
+    print("\033[1;4;32mFile 'score_total.csv' was saved successfully\033[0m")
+    
+    scores = df["score_total"].iloc[0]
+
+    best_index = np.argmax(scores)
+
+    print("\n\033[1m\033[4mBest configuration found:\033[0m\n")
+    
+#########################################################################
+# PLOTS
+#########################################################################
+    ota_diam_mm = (df["OTA diameter (m)"].iloc[0]) * 1000
+    cost = df["Total cost (MEUR)"].iloc[0]
+    
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 5))
+        
+    for i in range(0, len(cost)):
+    
+        if i == best_index:
+            pass
+        else:
+            ax.plot(ota_diam_mm[i], cost[i], 'o', label = f'{ota_diam_mm[i]} mm')
             
-    # Calculate over the ponderated score
-    df["score_total"] = sum(df[c + "_norm"] * w for c, w in criterios.items())
+    ax.plot(ota_diam_mm[best_index], cost[best_index], 'b*', ms = 20, label = f'Best fit: {ota_diam_mm[best_index]}')
+    plt.title('Cost (MEUR) vs OTA\'s diameter')
+    plt.xlabel('OTA\'s diameter (mm)')
+    plt.ylabel('Cost (MEUR)')
+    plt.grid(which='minor', alpha=0)
+    plt.grid(which='major', alpha=0.5)
+    lgnd = plt.legend(loc="upper right")
     
-    df_sorted = df.sort_values(by="total_score", ascending=False)
-    print(df_sorted[["Module diameter (m)", "Use tip/tilt?", "total_score"] + list(criterios.keys())])
+    plt.savefig("Figures/Cost_vs_Aperture.png")
     
-def snr_cal(module_diameter_m, efi_sys_MARCOT, fiber_core_mm_MARCOT):
+    print("\033[1;4;32mFigure 'Cost_vs_Aperture.png' was saved successfully\033[0m")
+
+    plt.close()
+    
+    for col in criterios.keys():
+        val = df[col].iloc[0]
+        if isinstance(val, (list, np.ndarray)):
+            print(f"{col}: {val[best_index]}")
+        else:
+            print(f"{col}: {val}")
+
+    print(f"score_total: {scores[best_index]}")
+
+    
+def snr_cal(archive):
     # Detector paremeters (CARMENES-VIS)
+    df = pd.read_csv('data/results_marcot.csv', sep = '\t')
+    
+    try:
+        def parse_array(x):
+            if not isinstance(x, str) or not re.search(r'\d', x):
+                return x
+            x = x.strip("[] \n\t")
+            return np.fromstring(x, sep=' ')
+        df['Selected commercial output core (microns)'] = df['Selected commercial output core (microns)'].apply(parse_array)
+    except Exception as e:
+        print(f'\033[4;93;1mWARNING: Error in column {col}: {str(e)}\033[0m')
+        return None
+    
+    module_diameter_m = df['Module diameter (m)'].iloc[0]
+    efi_sys_MARCOT = 0.9
+    # CAMBIAR A UN VALOR MEJOR CUANDO EL stimator.py CALCULE AL EFICIENCIA DLE SISTEMA DE MARCOT
+    fiber_core_mm_MARCOT = (df['Selected commercial output core (microns)'].iloc[0]) * 1e-3
+    # CUIDADO QUE EL VALOR QUE COJO DE df ESTÁ EN um Y NO EN mm
     
     t_exp = 100 # Exposure time [s]
     plate_scale = 0.169 # Plate scale [mm/"]
@@ -96,7 +209,7 @@ def snr_cal(module_diameter_m, efi_sys_MARCOT, fiber_core_mm_MARCOT):
 
     def signal(module_diameter_m, efi_sys, hc, QE, l_ini, l_fin, F_obs_J):
         result, error = quad(function, l_ini, l_fin)
-        n_adu = (np.pi * (module_diameter_m / 2) * efi_sys) / hc * F_obs_J * QE * result
+        n_adu = (np.pi * ((module_diameter_m / 2) ** 2) * efi_sys) / hc * F_obs_J * QE * result
         return n_adu
 
     N_ADU_TRAD = signal(module_diameter_m, 0.94, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
@@ -105,11 +218,14 @@ def snr_cal(module_diameter_m, efi_sys_MARCOT, fiber_core_mm_MARCOT):
     N_ADU_MARCOT = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
     SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT) + N_ADU_MARCOT / g)
     
+    df['SNR fraction'] = None
+
+    df.at[0, 'SNR fraction'] = SNR_MARCOT / SNR_TRAD
+
+    df.to_csv('data/results_marcot.csv', sep='\t', index=False)
+        
     return SNR_MARCOT / SNR_TRAD
-
-
-
-
+    
 
 
 
