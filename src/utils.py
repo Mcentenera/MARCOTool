@@ -29,84 +29,70 @@ def print_results(results):
     for k in other_keys:
         print(f"{k:<45}: {results[k]}")
 
-def multi_criteria(archive):
-    df = pd.read_csv('data/results_marcot.csv', sep='\t')
+def multi_criteria(results_csv_path: str = None, criteria: dict = None):
+    # Si no se pasa ruta, usamos el CSV por defecto
+    if results_csv_path is None:
+        results_csv_path = RES("data", "results_marcot.csv")
+    df = pd.read_csv(results_csv_path, sep='\t')
 
-    criterios = {
-        "Expected efficiency (%)": 0.9,
-        "Cost telescope + PL (MEUR)": 0.5,
-        "Total modules": 0,
-        "Resolution with commercial fibers": 0.8,
-        "Number of OTA for high efficiency": 0.2,
-        "Spectrograph volume (m³)": 0.5,
-        "SNR fraction": 0.9,
-        "OTA diameter (m)": 0,
-        "Recalculated module diameter (m)": 0,
-        "Recalculated telescope aperture (m)": 0
-    }
+    if criteria is None:
+        criteria = {
+            "Expected efficiency (%)": 0.9,
+            "Cost telescope + PL (MEUR)": 0.5,
+            "Total modules": 0,
+            "Resolution with commercial fibers": 0.8,
+            "Number of OTA for high efficiency": 0.2,
+            "Spectrograph volume (m³)": 0.5,
+            "SNR fraction": 0.9,
+            "OTA diameter (m)": 0,
+            "Recalculated module diameter (m)": 0,
+            "Recalculated telescope aperture (m)": 0
+        }
 
-    more = ["Expected efficiency (%)", "Resolution with commercial fibers", "SNR fraction", "Recalculated telescope aperture (m)"]
+    more = ["Expected efficiency (%)", "Resolution with commercial fibers", "SNR fraction",
+            "SNR PL vs pseu fraction", "Recalculated telescope aperture (m)"]
     less = ["Cost telescope + PL (MEUR)", "Total modules" ,"Number of OTAs", "Spectrograph volume (m³)"]
 
-    # Just necesary columns
-    missing_cols = [col for col in criterios if col not in df.columns]
-    if missing_cols:
-        print(f'\033[4;93;1mWARNING: Missing columns: {missing_cols}\033[0m')
-        return None
-
-    # Pass from list to array
+    # --- Conversión de columnas con arrays ---
     list_columns = [col for col in df.columns if df[col].dtype == object and df[col].astype(str).str.startswith('[').any()]
-    
     for col in list_columns:
-        try:
-            def parse_array(x):
-                if not isinstance(x, str) or not re.search(r'\d', x):
-                    return x
-                x = x.strip("[] \n\t")
-                return np.fromstring(x, sep=' ')
-            df[col] = df[col].apply(parse_array)
-        except Exception as e:
-            print(f'\033[4;93;1mWARNING: Error in column {col}: {str(e)}\033[0m')
-            return None
+        def parse_array(x):
+            if not isinstance(x, str) or not re.search(r'\d', x):
+                return x
+            x = x.strip("[] \n\t")
+            return np.fromstring(x, sep=' ')
+        df[col] = df[col].apply(parse_array)
 
-    for criterio in criterios:
+    # --- Normalización ---
+    for criterio in criteria:
+        if criterio not in df.columns:
+            print(f"[WARNING] Missing column: {criterio}")
+            continue
+
         col_data = df[criterio]
-
-    # Check if we have any array at the column
         has_array = col_data.apply(lambda x: isinstance(x, (list, np.ndarray))).any()
 
         if has_array:
-        # Flatten arrays to calculate global min and max
-            try:
-                all_values = np.concatenate(col_data.apply(lambda x: np.array(x) if isinstance(x, (list, np.ndarray)) else np.array([x])))
-                vmin, vmax = np.min(all_values), np.max(all_values)
-
-                if vmax == vmin:
-                    print(f"\033[4;93;1mWARNING: The criteria '{criterio}' has constant values. Normalization not applicable\033[0m")
-                    df[criterio + "_norm"] = col_data.apply(lambda x: np.zeros_like(x) if isinstance(x, (list, np.ndarray)) else 0)
-                elif criterio in more:
-                    df[criterio + "_norm"] = col_data.apply(lambda x: (np.array(x) - vmin) / (vmax - vmin) if isinstance(x, (list, np.ndarray)) else (x - vmin) / (vmax - vmin))
-                else:
-                    df[criterio + "_norm"] = col_data.apply(lambda x: (vmax - np.array(x)) / (vmax - vmin) if isinstance(x, (list, np.ndarray)) else (vmax - x) / (vmax - vmin))
-            except Exception as e:
-                print(f"\033[4;93;1mWARNING: Error normalizing {criterio}: {e}\033[0m")
-                df[criterio + "_norm"] = 0
-
-        else:
-        # Scalar values only
-            vmin, vmax = col_data.min(), col_data.max()
-
+            all_values = np.concatenate(col_data.apply(lambda x: np.array(x) if isinstance(x, (list, np.ndarray)) else np.array([x])))
+            vmin, vmax = np.min(all_values), np.max(all_values)
             if vmax == vmin:
-                print(f"\033[4;93;1mWARNING: The criteria '{criterio}' has constant values. Normalization not applicable\033[0m")
+                df[criterio + "_norm"] = 0
+            elif criterio in more:
+                df[criterio + "_norm"] = col_data.apply(lambda x: (np.array(x) - vmin) / (vmax - vmin))
+            else:
+                df[criterio + "_norm"] = col_data.apply(lambda x: (vmax - np.array(x)) / (vmax - vmin))
+        else:
+            vmin, vmax = col_data.min(), col_data.max()
+            if vmax == vmin:
                 df[criterio + "_norm"] = 0
             elif criterio in more:
                 df[criterio + "_norm"] = (col_data - vmin) / (vmax - vmin)
             else:
                 df[criterio + "_norm"] = (vmax - col_data) / (vmax - vmin)
 
-    # Calculate score total
-    df["score_total"] = df[[c + "_norm" for c in criterios]].apply(
-    lambda row: sum(row[c + "_norm"] * criterios[c] for c in criterios),
+      # Calculate score total
+    df["score_total"] = df[[c + "_norm" for c in criteria]].apply(
+    lambda row: sum(row[c + "_norm"] * criteria[c] for c in criteria),
     axis=1)
     
     
@@ -150,7 +136,7 @@ def multi_criteria(archive):
 
     plt.close()
     
-    for col in criterios.keys():
+    for col in criteria.keys():
         val = df[col].iloc[0]
         if isinstance(val, (list, np.ndarray)):
             print(f"{col}: {val[best_index]}")
@@ -159,7 +145,7 @@ def multi_criteria(archive):
 
     print(f"score_total: {scores[best_index]}")
 
-    
+
 def snr_cal(archive):
     # Detector paremeters (CARMENES-VIS)
     df = pd.read_csv('data/results_marcot.csv', sep = '\t')
@@ -225,7 +211,117 @@ def snr_cal(archive):
     df.to_csv('data/results_marcot.csv', sep='\t', index=False)
         
     return SNR_MARCOT / SNR_TRAD
+
+
     
+def snr_cal_2(archive):
+    # Detector paremeters (CARMENES-VIS)
+    df = pd.read_csv('data/results_marcot.csv', sep = '\t')
+    try:
+        def parse_array(x):
+            if not isinstance(x, str) or not re.search(r'\d', x):
+                return x
+            x = x.strip("[] \n\t")
+            return np.fromstring(x, sep=' ')
+        df['Selected commercial output core (microns)'] = df['Selected commercial output core (microns)'].apply(parse_array)
+        df['Selected commercial input core (microns)'] = df['Selected commercial input core (microns)'].apply(parse_array)
+        df['Selected commercial output core 2-stage (microns)'] = df['Selected commercial ouput core 2-stage (microns)'].apply(parse_array)
+        df['Selected commercial output core (microns)'] = df['Selected commercial ouput core (microns)'].apply(parse_array)
+        df['Magnification factor'] = df['Magnification factor'].apply(parse_array)
+        df['Focal length (mm)'] = df['Focal length (mm)'].apply(parse_array)
+        df['Pixel size (microns)'] = df['Pixel size (microns)'].apply(parse_array)
+        df['Number of OTA for high efficiency'] = df['Number of OTA for high efficiency'].apply(parse_array)
+        df['Total modules'] = df['Total modules'].apply(parse_array)
+        
+        # ESTO HAY QUE CAMBIARLO PARA QUE NO HAYA QUE METER LOS PARÁMETROS UNO A UNO, SINO QUE LE LOOP PASE POR TODAS
+    except Exception as e:
+        print(f'\033[4;93;1mWARNING: Error in column: {str(e)}\033[0m')
+        return None
+    
+    module_diameter_m = df['Module diameter (m)'].iloc[0]
+    com_core_in = df['Selected commercial input core (microns)'].iloc[0] * 1e-6
+    efi_sys_MARCOT = 0.9
+    # CAMBIAR A UN VALOR MEJOR CUANDO EL stimator.py CALCULE AL EFICIENCIA DLE SISTEMA DE MARCOT
+    fiber_core_m_MARCOT = (df['Selected commercial output core (microns)'].iloc[0]) * 1e-6
+    # CUIDADO QUE EL VALOR QUE COJO DE df ESTÁ EN um Y NO EN mm
+    magnification_factor = df['Magnification factor'].iloc[0]
+    f_cam = df['Focal length camera (mm)'].iloc[0]
+    n_fiber_total = df['Number of OTA for high efficiency'].iloc[0]
+    total_modules = df['Total modules'].iloc[0]
+    com_core_out_2 = (df['Selected commercial output core 2-stage (microns)'].iloc[0]) * 1e-6
+    com_core_out = (df['Selected commercial output core (microns)'].iloc[0]) * 1e-6
+        
+    t_exp = 100 # Exposure time [s]
+    plate_scale = 0.169 # Plate scale [mm/"]
+    R_noise = 5 # Read noise [e-]
+    g = 1 # Ganancia [e-/ADU]
+    pix_size = df['Pixel size (microns)'].iloc[0] # Pixel size [mm]
+    DARK = 3 # DARK current [e-/s]
+    QE = 0.92 # Quatum efficiency
+    R = 94600
+    
+    def n_pix(magnification_factor, pix_size, fiber_core_mm, f_cam, R, theta_i, grating):
+        Theta_B = np.arctan(grating)
+        theta_d = 2 * Theta_B - theta_i
+        n_spa = 1.5 * ((magnification_factor * fiber_core_mm / 2) / (pix_size * 1e-6)) # Pixel in spatial direction. Divide by 2 because we have an image slicer
+        n_dis = (f_cam * 1e-3 / (pix_size * 1e-6 * R)) * (np.sin(theta_i) / np.cos(theta_d) + np.tan(theta_d))# Pixel in dispertion direction
+        return n_spa * n_dis
 
 
+    def N_det(DARK, t_exp, g, R_noise, magnification_factor, n_fiber_total, pix_size, fiber_core_mm, f_cam, R, theta_i, grating):
+        return n_fiber_total * n_pix(magnification_factor, pix_size, fiber_core_mm, f_cam, R, theta_i, grating) * ((DARK / g) * t_exp + (R_noise / g) ** 2)
 
+    # Parameters for a random object J02530+168
+
+    l_ini = 1.1e-6 # Beginning od the J band [m]
+    l_fin = 1.4e-6 # End of the J band [m]
+    hc = 1.98644586e-25 # Speed light and Planck cte [J/m]
+    F_obs_J = 1.277494916846618e-12 # Observational magnitude [W/m2/um]
+
+
+    # Define the function inside the integral
+    def function(x):
+        return x
+
+    def signal(module_diameter_m, efi_sys, hc, QE, l_ini, l_fin, F_obs_J):
+        result, error = quad(function, l_ini, l_fin)
+        n_adu = (np.pi * ((module_diameter_m / 2) ** 2) * efi_sys) / hc * F_obs_J * QE * result
+        return n_adu
+
+    N_ADU_PSEU = signal(module_diameter_m, 0.94, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
+    SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, n_fiber_total, pix_size, com_core_in, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_PSEU / g)
+        
+    N_ADU_PL = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
+    SNR_PL = (N_ADU_PL / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, 1, pix_size, fiber_core_m_MARCOT, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_PL / g)
+    
+    N_ADU_TRAD = signal(module_diameter_m, 0.94, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
+    SNR_TRAD = (N_ADU_TRAD / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, 1, pix_size, 100e-3, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_TRAD / g)
+    
+    N_ADU_MARCOT = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
+    SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, total_modules, pix_size, fiber_core_mm_MARCOT, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_MARCOT / g)
+    
+    N_ADU_PSEU_2 = signal(module_diameter_m, 0.94, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
+    SNR_PSEU_2 = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, n_modules_total, pix_size, com_core_out, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_PSEU / g)
+        
+    N_ADU_PL_2 = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
+    SNR_PL_2 = (N_ADU_PL / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, 1, pix_size, com_core_out_2, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_PL / g)
+    
+    df['SNR fraction'] = None
+
+    df.at[0, 'SNR fraction'] = SNR_MARCOT / SNR_TRAD
+
+    #df.to_csv('data/results_marcot.csv', sep='\t', index=False)
+    
+    df['SNR PL vs pseu fraction'] = None
+
+    df.at[0, 'SNR PL vs pseu fraction'] = SNR_PL / SNR_PSEU
+
+    # df.to_csv('data/results_marcot.csv', sep='\t', index=False)
+    
+    df['SNR PL vs pseu fraction 2-stage'] = None
+
+    df.at[0, 'SNR PL vs pseu fraction 2-stage'] = SNR_PL_2 / SNR_PSEU_2
+
+    df.to_csv('data/results_marcot.csv', sep='\t', index=False)
+        
+    return SNR_PL / SNR_PSEU, SNR_MARCOT / SNR_TRAD, SNR_PL_2 / SNR_PSEU_2
