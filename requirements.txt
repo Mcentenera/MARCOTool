@@ -1,8 +1,5 @@
 numpy
-<<<<<<< HEAD
 pandas
+scipy
+PyQt5
 matplotlib
-=======
-matplotlib
-pandas
->>>>>>> 717e0c8 (Initial commit)
