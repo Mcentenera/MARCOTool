@@ -6,7 +6,7 @@ A pipeline for telescope, photonic lantern and instrument design
 
 Requirements:
 
--  Python (2.7 or 3.6+), numpy, scipy.
+-  Python (2.7 or 3.6+), numpy, scipy, matplotlib, pyqt5
 
 ## How to start
 
@@ -31,7 +31,7 @@ pip install -r requirements.txt
 Execute as:
 
 ```hr-estimator
-python run_estimator.py --module_diameter_m --ota_diameter_m --f_number_ota --seeing_fwhm_arcsec --use_tip_tilt --target_encircled_energy --NA_in --NA_out --wavelength_min_nm --wavelength_max_nm --magnification_factor --pseudoslit --super_pl
+python GUI_PyQt_8.py
 ```
 
 ## Default input parameters
