@@ -1,2 +1,0 @@
-# Diameter(mm) f_number Focal_length(mm) Tube_Diameter(mm) Tube_length(mm) Weight(kg) Cost(€/u)
-406.0 8.0 3250.0 565.0 1124.0 37.0 7790.0
