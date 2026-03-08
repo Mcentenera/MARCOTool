@@ -1,7 +1,7 @@
 # MARCOTool
 A pipeline for telescope, photonic lantern and instrument design
 
-![Texto alternativo](Images/logo.png)
+![Texto alternativo](Figures/logo.png)
 
 
 ## Installation instruction
