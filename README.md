@@ -1,4 +1,4 @@
-# HR-Estimator
+# MARCOT-tool
 A pipeline for telescope, photonic lantern and instrument design
 
 
