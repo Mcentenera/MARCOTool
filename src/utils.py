@@ -301,24 +301,9 @@ def multi_criteria(results_csv_path, criteria):
     I_criteria_st = []
     I_criteria_crt = []
     I_criteria_mcr = []
-    I_criteria_ahp = []
     I_criteria_equ = []
     
-    ahp_weights = [[0.19586541, 0.25638225, 0.31047076], [0.06807916, 0.08973889, 0.11565203], [0.07681046, 0.11034352, 0.13974714], [0.15465894, 0.20606145, 0.25151164], [0.13518437, 0.18901257, 0.23682947], [0.11611148, 0.14846132, 0.1804537], [0.06807916, 0.08973889, 0.11565203]]
-    
     equ_weights = np.linspace(1/7, 1/7, 7)
-
-    
-    if len_criteria > 7:
-        for i in range(0, len_criteria - 7):
-            print(f'i es {i}')
-            ahp_weights.append([0,0,0])
-        ahp_weights = np.array(ahp_weights)
-    else:
-        ahp_weights = np.array(ahp_weights)
-        
-    ahp_weights_defu = (ahp_weights[:,0] + 4 * ahp_weights[:,1] + ahp_weights[:,2]) / 6
-
     
     for j, crit in enumerate(criteria):
         st_fuzzy_values = df_decision_matrix[crit + "_norm_st"].values
@@ -330,27 +315,23 @@ def multi_criteria(results_csv_path, criteria):
         I_alternative_st = []
         I_alternative_crt = []
         I_alternative_mcr = []
-        I_alternative_ahp = []
         I_alternative_equ = []
         
         for i in range(0, len_alternative):
             I_alternative_st.append(st_fuzzy_values[i] * st_variance_weight[j,:])
             I_alternative_crt.append(st_fuzzy_values[i] * CRITIC_weight[j,:])
             I_alternative_mcr.append(st_fuzzy_values[i] * MEREC_weight[j,:])
-            I_alternative_ahp.append(st_fuzzy_values[i] * ahp_weights[j,:])
             I_alternative_equ.append(st_fuzzy_values_defu[i] * equ_weights[j])
 
         I_criteria_st.append(np.array(I_alternative_st))
         I_criteria_crt.append(np.array(I_alternative_crt))
         I_criteria_mcr.append(np.array(I_alternative_mcr))
-        I_criteria_ahp.append(np.array(I_alternative_ahp))
         I_criteria_equ.append(np.array(I_alternative_equ))
 
 
     I_criteria_st = np.array(I_criteria_st)
     I_criteria_crt = np.array(I_criteria_crt)
     I_criteria_mcr = np.array(I_criteria_mcr)
-    I_criteria_ahp = np.array(I_criteria_ahp)
     I_criteria_equ = np.array(I_criteria_equ)
     
     A_star_st = np.array(np.max(I_criteria_st[:, :, 2], axis = 1))
@@ -359,8 +340,6 @@ def multi_criteria(results_csv_path, criteria):
     A_less_crt = np.array(np.min(I_criteria_crt[:, :, 0], axis = 1))
     A_star_mrc = np.array(np.max(I_criteria_mcr[:, :, 2], axis = 1))
     A_less_mrc = np.array(np.min(I_criteria_mcr[:, :, 0], axis = 1))
-    A_star_ahp = np.array(np.max(I_criteria_ahp[:, :, 2], axis = 1))
-    A_less_ahp = np.array(np.min(I_criteria_ahp[:, :, 0], axis = 1))
     A_star_equ = np.array(np.max(I_criteria_equ, axis = 1))
     A_less_equ = np.array(np.min(I_criteria_equ, axis = 1))
     
@@ -368,14 +347,12 @@ def multi_criteria(results_csv_path, criteria):
     g_st = (np.prod(I_criteria_st, axis=1)) ** (1 / len_alternative)
     g_crt = (np.prod(I_criteria_crt, axis=1)) ** (1 / len_alternative)
     g_mrc = (np.prod(I_criteria_mcr, axis=1)) ** (1 / len_alternative)
-    g_ahp = (np.prod(I_criteria_ahp, axis=1)) ** (1 / len_alternative)
     g_equ = (np.prod(I_criteria_equ, axis=1)) ** (1 / len_alternative)
 
     # Calculate the distances (MABAC)
     q_st = I_criteria_st - g_st[:, np.newaxis, :]
     q_crt = I_criteria_crt - g_crt[:, np.newaxis, :]
     q_mrc = I_criteria_mcr - g_mrc[:, np.newaxis, :]
-    q_ahp = I_criteria_ahp - g_ahp[:, np.newaxis, :]
     q_equ = I_criteria_equ - g_equ[:, np.newaxis]
     
     # Calculate the total score (MABAC)
@@ -385,8 +362,6 @@ def multi_criteria(results_csv_path, criteria):
     S_crt = (S_crt[:,0] + 4 * S_crt[:,1] + S_crt[:,2]) / 6
     S_mrc = sum(q_mrc)
     S_mrc = (S_mrc[:,0] + 4 * S_mrc[:,1] + S_mrc[:,2]) / 6
-    S_ahp = sum(q_ahp)
-    S_ahp = (S_ahp[:,0] + 4 * S_ahp[:,1] + S_ahp[:,2]) / 6
     S_equ = sum(q_equ)
 
     df["score_total_st_MABAC"] = pd.Series(S_st, index=range(S_st.size))
@@ -394,11 +369,7 @@ def multi_criteria(results_csv_path, criteria):
     df["score_total_crt_MABAC"] = pd.Series(S_crt, index=range(S_crt.size))
     
     df["score_total_mrc_MABAC"] = pd.Series(S_mrc, index=range(S_mrc.size))
-    
-    df["score_total_ahp_MABAC"] = pd.Series(S_ahp, index=range(S_ahp.size))
-    
-    print(f'El ranking de MABAC es {S_equ}')
-    
+            
     # Calculate the ideal and anti-ideal distances (TOPSIS)
     d_star_st = []
     d_less_st = []
@@ -406,8 +377,6 @@ def multi_criteria(results_csv_path, criteria):
     d_less_crt = []
     d_star_mrc = []
     d_less_mrc = []
-    d_star_ahp = []
-    d_less_ahp = []
     d_star_equ = []
     d_less_equ = []
     
@@ -424,10 +393,6 @@ def multi_criteria(results_csv_path, criteria):
         a_star_mrc = A_star_mrc[j]
         a_less_mrc = A_less_mrc[j]
         
-        i_ahp = I_criteria_ahp[j]
-        a_star_ahp = A_star_ahp[j]
-        a_less_ahp = A_less_ahp[j]
-        
         i_equ = I_criteria_equ[j]
         a_star_equ = A_star_equ[j]
         a_less_equ = A_less_equ[j]
@@ -435,13 +400,11 @@ def multi_criteria(results_csv_path, criteria):
         d_star_st.append(np.sqrt(1/3 * ((a_star_st - i_st[:,0]) ** 2 + (a_star_st - i_st[:,1]) ** 2 + (a_star_st - i_st[:,2]) ** 2)))
         d_star_crt.append(np.sqrt(1/3 * ((a_star_crt - i_crt[:,0]) ** 2 + (a_star_crt - i_crt[:,1]) ** 2 + (a_star_crt - i_crt[:,2]) ** 2)))
         d_star_mrc.append(np.sqrt(1/3 * ((a_star_mrc - i_mrc[:,0]) ** 2 + (a_star_mrc - i_mrc[:,1]) ** 2 + (a_star_mrc - i_mrc[:,2]) ** 2)))
-        d_star_ahp.append(np.sqrt(1/3 * ((a_star_ahp - i_ahp[:,0]) ** 2 + (a_star_ahp - i_ahp[:,1]) ** 2 + (a_star_ahp - i_ahp[:,2]) ** 2)))
         d_star_equ.append(np.sqrt((a_star_equ - i_equ) ** 2))
         
         d_less_st.append(np.sqrt(1/3 * ((a_less_st - i_st[:,0]) ** 2 + (a_less_st - i_st[:,1]) ** 2 + (a_less_st - i_st[:,2]) ** 2)))
         d_less_crt.append(np.sqrt(1/3 * ((a_less_crt - i_crt[:,0]) ** 2 + (a_less_crt - i_crt[:,1]) ** 2 + (a_less_crt - i_crt[:,2]) ** 2)))
         d_less_mrc.append(np.sqrt(1/3 * ((a_less_mrc - i_mrc[:,0]) ** 2 + (a_less_mrc - i_mrc[:,1]) ** 2 + (a_less_mrc - i_mrc[:,2]) ** 2)))
-        d_less_ahp.append(np.sqrt(1/3 * ((a_less_ahp - i_ahp[:,0]) ** 2 + (a_less_ahp - i_ahp[:,1]) ** 2 + (a_less_ahp - i_ahp[:,2]) ** 2)))
         d_less_equ.append(np.sqrt((a_less_equ - i_equ) ** 2))
         
         
@@ -451,50 +414,38 @@ def multi_criteria(results_csv_path, criteria):
     D_less_crt = sum(d_less_crt)
     D_star_mrc = sum(d_star_mrc)
     D_less_mrc = sum(d_less_mrc)
-    D_star_ahp = sum(d_star_ahp)
-    D_less_ahp = sum(d_less_ahp)
     D_star_equ = sum(d_star_equ)
     D_less_equ = sum(d_less_equ)
     
     CC_st = D_less_st / (D_less_st + D_star_st)
     CC_crt = D_less_crt / (D_less_crt + D_star_crt)
     CC_mrc = D_less_mrc / (D_less_mrc * D_star_mrc)
-    CC_ahp = D_less_ahp / (D_less_ahp * D_star_ahp)
     CC_equ = D_less_equ / (D_less_equ * D_star_equ)
-
-    print(f'El ranking de TOPSIS es {CC_equ}')
 
     df["score_total_st_TOPSIS"] = pd.Series(CC_st, index=range(CC_st.size))
     
     df["score_total_crt_TOPSIS"] = pd.Series(CC_crt, index=range(CC_crt.size))
     
     df["score_total_mrc_TOPSIS"] = pd.Series(CC_mrc, index=range(CC_mrc.size))
-    
-    df["score_total_ahp_TOPSIS"] = pd.Series(CC_ahp, index=range(CC_ahp.size))
-    
+        
     df.to_csv("data/score_total.csv", sep = '\t', index = False)
 
     
     df_sorted_st_TOPSIS = df.sort_values(by="score_total_st_TOPSIS", ascending=False)
     df_sorted_crt_TOPSIS = df.sort_values(by="score_total_crt_TOPSIS", ascending=False)
     df_sorted_mrc_TOPSIS = df.sort_values(by="score_total_mrc_TOPSIS", ascending=False)
-    df_sorted_ahp_TOPSIS = df.sort_values(by="score_total_ahp_TOPSIS", ascending=False)
 
     df_sorted_st_MABAC = df.sort_values(by="score_total_st_MABAC", ascending=False)
     df_sorted_crt_MABAC = df.sort_values(by="score_total_crt_MABAC", ascending=False)
     df_sorted_mrc_MABAC = df.sort_values(by="score_total_mrc_MABAC", ascending=False)
-    df_sorted_ahp_MABAC = df.sort_values(by="score_total_ahp_MABAC", ascending=False)
-
     
     df_sorted_st_TOPSIS.to_csv("data/score_total_st_TOPSIS.csv", sep = '\t', index = False)
     df_sorted_crt_TOPSIS.to_csv("data/score_total_crt_TOPSIS.csv", sep = '\t', index = False)
     df_sorted_mrc_TOPSIS.to_csv("data/score_total_mrc_TOPSIS.csv", sep = '\t', index = False)
-    df_sorted_ahp_TOPSIS.to_csv("data/score_total_ahp_TOPSIS.csv", sep = '\t', index = False)
 
     df_sorted_st_MABAC.to_csv("data/score_total_st_MABAC.csv", sep = '\t', index = False)
     df_sorted_crt_MABAC.to_csv("data/score_total_crt_MABAC.csv", sep = '\t', index = False)
     df_sorted_mrc_MABAC.to_csv("data/score_total_mrc_MABAC.csv", sep = '\t', index = False)
-    df_sorted_ahp_MABAC.to_csv("data/score_total_ahp_MABAC.csv", sep = '\t', index = False)
 
     print("\033[1;4;32mFile 'score_total.csv' was saved successfully\033[0m")
     
@@ -509,11 +460,7 @@ def multi_criteria(results_csv_path, criteria):
     scores_mrc = df["score_total_mrc_TOPSIS"].values
 
     best_index_mrc = np.argmax(scores_mrc)
-    
-    scores_ahp = df["score_total_ahp_TOPSIS"].values
-
-    best_index_ahp = np.argmax(scores_ahp)
-    
+        
     print("\n\033[1m\033[4mBest configuration found:\033[0m\n")
     
 #########################################################################
@@ -645,9 +592,9 @@ def multi_criteria(results_csv_path, criteria):
     
     fig, ax = plt.subplots(figsize=(8, 5), subplot_kw={'projection': 'polar'})
     
-    series = [st_variance_weight_defu, CRITIC_weight_defu, MEREC_weight_defu, ahp_weights_defu]
-    series_labels = ["F-St.Variance", "F-CRITIC", "F-MEREC", "AHP"]
-    colors = ["tab:red", "tab:green", "tab:blue", "tab:purple"]
+    series = [st_variance_weight_defu, CRITIC_weight_defu, MEREC_weight_defu]
+    series_labels = ["F-St.Variance", "F-CRITIC", "F-MEREC"]
+    colors = ["tab:red", "tab:green", "tab:blue"]
     
     N = len(criteria)
     angles = np.linspace(0, 2 * np.pi, N, endpoint=False)
@@ -681,8 +628,7 @@ def multi_criteria(results_csv_path, criteria):
     
         "F-St. Variance": st_variance_weight_defu,
         "F-CRITIC":       CRITIC_weight_defu,
-        "F-MEREC":        MEREC_weight_defu,
-        "AHP":            ahp_weights_defu
+        "F-MEREC":        MEREC_weight_defu
     })
 
     corr = df.corr(method="pearson")
@@ -1101,23 +1047,12 @@ def tables(criteria):
             column.append(f'C{7 + 1 + i}')
         
     txt_out = Path("data/table_weight.txt")
-    
-    ahp_weights = [[0.19586541, 0.25638225, 0.31047076], [0.06807916, 0.08973889, 0.11565203], [0.07681046, 0.11034352, 0.13974714], [0.15465894, 0.20606145, 0.25151164], [0.13518437, 0.18901257, 0.23682947], [0.11611148, 0.14846132, 0.1804537], [0.06807916, 0.08973889, 0.11565203]]
 
-    
-    if len(criteria) > 7:
-        for i in range(0, len(criteria) - 7):
-            ahp_weights.append([0,0,0])
-        ahp_weights = np.array(ahp_weights)
-    else:
-        ahp_weights = np.array(ahp_weights)
-
-    index_name = ['St. Variance', 'CRITIC', 'MEREC', 'AHP']
+    index_name = ['St. Variance', 'CRITIC', 'MEREC']
     weights = []
     weights.append(np.round(st_weight, 3))
     weights.append(np.round(crt_weight, 3))
     weights.append(np.round(mrc_weight, 3))
-    weights.append(np.round(ahp_weights, 3))
     weights = np.array(weights)
     
     header_cells = [rf"\textbf{{Criterion}}"] + [rf"\textbf{{{c}}}" for c in index_name]
@@ -1159,22 +1094,12 @@ def tables(criteria):
             column.append(f'C{7 + 1 + i}')
         
     txt_out = Path("data/table_weight_defu.txt")
-            
-    ahp_weights_defu = (ahp_weights[:,0] + 4 * ahp_weights[:,1] + ahp_weights[:,2]) / 6
-    
-    if len(criteria) > 7:
-        for i in range(0, len(criteria) - 7):
-            ahp_weights.append([0,0,0])
-        ahp_weights = np.array(ahp_weights)
-    else:
-        ahp_weights = np.array(ahp_weights)
 
-    index_name = ['St. Variance', 'CRITIC', 'MEREC', 'AHP']
+    index_name = ['St. Variance', 'CRITIC', 'MEREC']
     weights = []
     weights.append(np.round(st_weight_defu, 3))
     weights.append(np.round(crt_weight_defu, 3))
     weights.append(np.round(mrc_weight_defu, 3))
-    weights.append(np.round(ahp_weights_defu, 3))
     weights = np.array(weights)
     
     header_cells = [rf"\textbf{{Criterion}}"] + [rf"\textbf{{{c}}}" for c in index_name]
@@ -1213,15 +1138,11 @@ def tables(criteria):
     
     df_mrc_TOPSIS = pd.read_csv("data/score_total_mrc_TOPSIS.csv", sep='\t', header=0, index_col=0)
     
-    df_ahp_TOPSIS = pd.read_csv("data/score_total_ahp_TOPSIS.csv", sep='\t', header=0, index_col=0)
-    
     df_st_MABAC = pd.read_csv("data/score_total_st_MABAC.csv", sep='\t', header=0, index_col=0)
     
     df_crt_MABAC = pd.read_csv("data/score_total_crt_MABAC.csv", sep='\t', header=0, index_col=0)
     
     df_mrc_MABAC = pd.read_csv("data/score_total_mrc_MABAC.csv", sep='\t', header=0, index_col=0)
-    
-    df_ahp_MABAC = pd.read_csv("data/score_total_ahp_MABAC.csv", sep='\t', header=0, index_col=0)
     
     txt_out = Path("data/table_ranking.txt")
     
@@ -1229,15 +1150,13 @@ def tables(criteria):
     columns_TOPSIS.append(df_st_TOPSIS['OTA diameter (m)'].values)
     columns_TOPSIS.append(df_crt_TOPSIS['OTA diameter (m)'].values)
     columns_TOPSIS.append(df_mrc_TOPSIS['OTA diameter (m)'].values)
-    columns_TOPSIS.append(df_ahp_TOPSIS['OTA diameter (m)'].values)
     
     columns_MABAC = []
     columns_MABAC.append(df_st_MABAC['OTA diameter (m)'].values)
     columns_MABAC.append(df_crt_MABAC['OTA diameter (m)'].values)
     columns_MABAC.append(df_mrc_MABAC['OTA diameter (m)'].values)
-    columns_MABAC.append(df_ahp_MABAC['OTA diameter (m)'].values)
     
-    index_name = ['St. Variance', 'CRITIC', 'MEREC', 'AHP']
+    index_name = ['St. Variance', 'CRITIC', 'MEREC']
     
     header_cells = [rf"\textbf{{{c}}}" for c in index_name]
         
