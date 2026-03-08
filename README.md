@@ -7,7 +7,7 @@ A pipeline for telescope, photonic lantern and instrument design
 
 Requirements:
 
--  Python (2.7 or 3.6+), numpy, scipy, matplotlib, pyqt5
+-  Python (2.7 or 3.6+), numpy, scipy, matplotlib, pyqt5, seaborn
 
 ## How to start
 
