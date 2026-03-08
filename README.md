@@ -1,4 +1,4 @@
-# MARCOT-tool
+# MARCOTool
 A pipeline for telescope, photonic lantern and instrument design
 
 
