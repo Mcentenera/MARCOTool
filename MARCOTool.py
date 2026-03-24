@@ -32,7 +32,7 @@ class MarcotApp(QWidget):
         
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MARCOT HR Estimator v1.9")
+        self.setWindowTitle("MARCOTool v1.9")
 
         layout = QVBoxLayout()
 
@@ -48,16 +48,28 @@ class MarcotApp(QWidget):
         layout.addWidget(logo_label)
 
         param_layout = QGridLayout()
+        param_detector = QGridLayout()
+
 
         # Input parameters control
-        self.module_diam_label = QLabel("Module diameter (m):")
+        self.SCALE = int(round(1/0.1))  # 0.1 -> 10, 0.01 -> 100
+
         self.module_diam_slider = QSlider(Qt.Horizontal)
-        self.module_diam_slider.setMinimum(1)
-        self.module_diam_slider.setMaximum(15)
-        self.module_diam_slider.setValue(5)
-        self.module_diam_slider.setTickInterval(1)
-        self.module_diam_slider.valueChanged.connect(self.update_module_diam_label)
-        
+        self.module_diam_slider.setMinimum(int(0 * self.SCALE))
+        self.module_diam_slider.setMaximum(int(15 * self.SCALE))
+        self.module_diam_slider.setValue(int(5 * self.SCALE))
+        self.module_diam_slider.setSingleStep(1)
+
+        self.module_diam = QDoubleSpinBox()
+        self.module_diam.setDecimals(len(str(0.1).split('.')[-1]) if '.' in str(0.1) else 0)
+        self.module_diam.setMinimum(0)
+        self.module_diam.setMaximum(15)
+        self.module_diam.setSingleStep(0.1)
+        self.module_diam.setValue(5)
+
+        self.module_diam_slider.valueChanged.connect(self._on_slider)
+        self.module_diam.valueChanged.connect(self._on_spin)
+
         self.f_number_out_spin = QDoubleSpinBox()
         self.f_number_out_spin.setRange(1, 15)
         self.f_number_out_spin.setSingleStep(0.1)
@@ -72,18 +84,33 @@ class MarcotApp(QWidget):
         self.d_core_out_locked = QCheckBox("Lock")
         self.d_core_out_locked.setChecked(False)
         
-        self.telescope_aperture_label = QLabel("Telescope effective aperture (m):")
         self.telescope_aperture_slider = QSlider(Qt.Horizontal)
-        self.telescope_aperture_slider.setMinimum(1)
-        self.telescope_aperture_slider.setMaximum(30)
-        self.telescope_aperture_slider.setValue(15)
-        self.telescope_aperture_slider.setTickInterval(1)
-        self.telescope_aperture_slider.valueChanged.connect(self.update_telescope_aperture_label)
+        self.telescope_aperture_slider.setMinimum(int(0 * self.SCALE))
+        self.telescope_aperture_slider.setMaximum(int(40 * self.SCALE))
+        self.telescope_aperture_slider.setValue(int(15 * self.SCALE))
+        self.telescope_aperture_slider.setSingleStep(1)
 
+        self.telescope_aperture = QDoubleSpinBox()
+        self.telescope_aperture.setDecimals(len(str(0.1).split('.')[-1]) if '.' in str(0.1) else 0)
+        self.telescope_aperture.setMinimum(0)
+        self.telescope_aperture.setMaximum(40)
+        self.telescope_aperture.setSingleStep(0.1)
+        self.telescope_aperture.setValue(15)
+
+        self.telescope_aperture_slider.valueChanged.connect(self._on_slider_tel)
+        self.telescope_aperture.valueChanged.connect(self._on_spin_tel)
+        
+        self.focal_adapter_spin = QDoubleSpinBox()
+        self.focal_adapter_spin.setRange(0.1, 15)
+        self.focal_adapter_spin.setSingleStep(0.05)
+        self.focal_adapter_spin.setValue(5)
+        self.focal_adapter_locked = QCheckBox("Lock")
+        self.focal_adapter_locked.setChecked(True)
+        
         self.seeing_spin = QDoubleSpinBox()
         self.seeing_spin.setRange(0.1, 2.0)
         self.seeing_spin.setSingleStep(0.05)
-        self.seeing_spin.setValue(1.0)
+        self.seeing_spin.setValue(1.00)
         
         self.sky_aperture_spin = QDoubleSpinBox()
         self.sky_aperture_spin.setRange(0, 10)
@@ -93,6 +120,9 @@ class MarcotApp(QWidget):
         self.sky_aperture_locked.setChecked(True)
 
         self.tiptilt_checkbox = QCheckBox("Use Tip/Tilt")
+        
+        self.PL_effi_checkbox = QCheckBox("Maximize PL Efficiency")
+        self.PL_effi_checkbox.setChecked(False)
 
         self.encircled_spin = QDoubleSpinBox()
         self.encircled_spin.setRange(0.5, 1.0)
@@ -102,22 +132,57 @@ class MarcotApp(QWidget):
         self.lambda_min_spin = QDoubleSpinBox()
         self.lambda_min_spin.setRange(300, 1500)
         self.lambda_min_spin.setSingleStep(10)
-        self.lambda_min_spin.setValue(500)
+        self.lambda_min_spin.setValue(550)
 
         self.lambda_max_spin = QDoubleSpinBox()
-        self.lambda_max_spin.setRange(500, 2000)
+        self.lambda_max_spin.setRange(350, 2000)
         self.lambda_max_spin.setSingleStep(10)
-        self.lambda_max_spin.setValue(1000)
+        self.lambda_max_spin.setValue(1050)
 
         self.pseudoslit_checkbox = QCheckBox("Use Pseudoslit")
         self.pseudoslit_checkbox.setChecked(True)
 
-        self.superpl_checkbox = QCheckBox("Use Super-PL")
+        self.pseudoslit_checkbox.toggled.connect(self.sync_checkboxes_b)
 
+        self.superpl_checkbox = QCheckBox("Use Photonic Lantern")
+        self.superpl_checkbox.setChecked(False)
+        self.superpl_checkbox.toggled.connect(self.sync_checkboxes_a)
+
+        self.plate_scale_spin = QDoubleSpinBox()
+        self.plate_scale_spin.setRange(0, 500)
+        self.plate_scale_spin.setSingleStep(1)
+        self.plate_scale_spin.setValue(169)
+        
+        self.R_noise_spin = QDoubleSpinBox()
+        self.R_noise_spin.setRange(0, 10.0)
+        self.R_noise_spin.setSingleStep(0.01)
+        self.R_noise_spin.setValue(5)
+        
+        self.g_spin = QDoubleSpinBox()
+        self.g_spin.setRange(0, 10.0)
+        self.g_spin.setSingleStep(0.01)
+        self.g_spin.setValue(1)
+        
+        self.pixel_size_um_spin = QDoubleSpinBox()
+        self.pixel_size_um_spin.setRange(1.0, 50.0)
+        self.pixel_size_um_spin.setSingleStep(0.5)
+        self.pixel_size_um_spin.setValue(15)
+        
+        self.DARK_spin = QDoubleSpinBox()
+        self.DARK_spin.setRange(0, 10000)
+        self.DARK_spin.setSingleStep(1)
+        self.DARK_spin.setValue(3000)
+        
+        self.QE_spin = QDoubleSpinBox()
+        self.QE_spin.setRange(0, 1.0)
+        self.QE_spin.setSingleStep(0.01)
+        self.QE_spin.setValue(0.95)
+        
         # Set grid
         row = 0
-        param_layout.addWidget(self.module_diam_label, row, 0)
+        param_layout.addWidget(QLabel("Module diameter (m)"), row, 0)
         param_layout.addWidget(self.module_diam_slider, row, 1)
+        param_layout.addWidget(self.module_diam, row, 2)
         row += 1
         
         param_layout.addWidget(QLabel("F/# output"), row, 0)
@@ -129,11 +194,17 @@ class MarcotApp(QWidget):
         param_layout.addWidget(self.d_core_out_spin, row, 1)
         param_layout.addWidget(self.d_core_out_locked, row, 2)
         row += 1
-        
-        param_layout.addWidget(self.telescope_aperture_label, row, 0)
+                
+        param_layout.addWidget(QLabel("Total effective aperture (m)"), row, 0)
         param_layout.addWidget(self.telescope_aperture_slider, row, 1)
+        param_layout.addWidget(self.telescope_aperture, row, 2)
         row += 1
-
+        
+        param_layout.addWidget(QLabel("Focal Adapter (F/# input)"), row, 0)
+        param_layout.addWidget(self.focal_adapter_spin, row, 1)
+        param_layout.addWidget(self.focal_adapter_locked, row, 2)
+        row += 1
+        
         param_layout.addWidget(QLabel("Seeing FWHM (arcsec)"), row, 0)
         param_layout.addWidget(self.seeing_spin, row, 1)
         row += 1
@@ -144,6 +215,8 @@ class MarcotApp(QWidget):
         row += 1
 
         param_layout.addWidget(self.tiptilt_checkbox, row, 0)
+        
+        param_layout.addWidget(self.PL_effi_checkbox, row, 1)
         row += 1
 
         param_layout.addWidget(QLabel("Encircled Energy"), row, 0)
@@ -159,11 +232,36 @@ class MarcotApp(QWidget):
         row += 1
 
         param_layout.addWidget(self.pseudoslit_checkbox, row, 0)
-        row += 1
 
-        param_layout.addWidget(self.superpl_checkbox, row, 0)
+        param_layout.addWidget(self.superpl_checkbox, row, 1)
         row += 1
-
+        
+        row = 0
+        
+        param_detector.addWidget(QLabel("Plate Scale (um/arcsec)"), row, 0)
+        param_detector.addWidget(self.plate_scale_spin, row, 1)
+        row += 1
+        
+        param_detector.addWidget(QLabel("Read noise (e-)"), row, 0)
+        param_detector.addWidget(self.R_noise_spin, row, 1)
+        row += 1
+        
+        param_detector.addWidget(QLabel("Gain (e-/ADU)"), row, 0)
+        param_detector.addWidget(self.g_spin, row, 1)
+        row += 1
+        
+        param_detector.addWidget(QLabel("Pixel size (um/px)"), row, 0)
+        param_detector.addWidget(self.pixel_size_um_spin, row, 1)
+        row += 1
+        
+        param_detector.addWidget(QLabel("DARK · 1e3 (e-/s)"), row, 0)
+        param_detector.addWidget(self.DARK_spin, row, 1)
+        row += 1
+        
+        param_detector.addWidget(QLabel("Quantum Efficiency"), row, 0)
+        param_detector.addWidget(self.QE_spin, row, 1)
+        row += 1
+        
         # --- Tabs ofr input parameters ---
         self.input_tabs = QTabWidget()
 
@@ -177,9 +275,20 @@ class MarcotApp(QWidget):
         scroll.setWidget(basic_params_widget)
 
         self.input_tabs.addTab(scroll, "Basic parameters")
+        
+        
+        # Tab 2: detector parameters
+        detector_params_widget = QWidget()
+        detector_params_widget.setLayout(param_detector)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(detector_params_widget)
 
+        self.input_tabs.addTab(scroll, "Detector parameters")
+        
 
-        # Tab 2: criteria
+        # Tab 3: criteria
         criteria_widget = QWidget()
         crit_layout = QVBoxLayout()
 
@@ -236,7 +345,7 @@ class MarcotApp(QWidget):
         layout.addWidget(self.input_tabs)
 
         # Bottom to show advanced spectrograph parameters
-        self.advanced_button = QPushButton("Advanced parameters")
+        self.advanced_button = QPushButton("Show spectograph parameters")
         self.advanced_button.setCheckable(True)
         self.advanced_button.toggled.connect(self.toggle_advanced_params)
         layout.addWidget(self.advanced_button)
@@ -249,7 +358,7 @@ class MarcotApp(QWidget):
         advanced_layout = QGridLayout()
         
         self.grooves_mm_spin = QDoubleSpinBox()
-        self.grooves_mm_spin.setRange(10, 100)
+        self.grooves_mm_spin.setRange(10, 5000)
         self.grooves_mm_spin.setSingleStep(0.5)
         self.grooves_mm_spin.setValue(31.6)
         self.grooves_mm_locked = QCheckBox("Lock")
@@ -259,32 +368,21 @@ class MarcotApp(QWidget):
         self.resolution_slider = QSlider(Qt.Horizontal)
         self.resolution_slider.setMinimum(1)
         self.resolution_slider.setMaximum(200000)
-        self.resolution_slider.setValue(100000)
+        self.resolution_slider.setValue(82000)
         self.resolution_slider.setTickInterval(1)
         self.resolution_slider.valueChanged.connect(self.update_resolution_label)
         self.resolution_locked = QCheckBox("Lock")
         self.resolution_locked.setChecked(True)
 
-        self.mag_factor_spin = QDoubleSpinBox()
-        self.mag_factor_spin.setRange(0.5, 3.0)
-        self.mag_factor_spin.setSingleStep(0.05)
-        self.mag_factor_spin.setValue(1.2)
-        self.mag_locked = QCheckBox("Lock")
-        self.mag_locked.setChecked(True)
+        self.echelle_checkbox = QCheckBox("Echelle")
+        self.echelle_checkbox.setChecked(True)
         
         self.beam_size_mm_spin = QDoubleSpinBox()
         self.beam_size_mm_spin.setRange(50, 300)
         self.beam_size_mm_spin.setSingleStep(1)
         self.beam_size_mm_spin.setValue(154.8)
         self.beam_size_locked = QCheckBox("Lock")
-        self.beam_size_locked.setChecked(True)
-
-        self.pixel_size_um_spin = QDoubleSpinBox()
-        self.pixel_size_um_spin.setRange(1.0, 50.0)
-        self.pixel_size_um_spin.setSingleStep(0.5)
-        self.pixel_size_um_spin.setValue(15)
-        self.pixel_size_locked = QCheckBox("Lock")
-        self.pixel_size_locked.setChecked(True)
+        self.beam_size_locked.setChecked(False)
         
         self.rel_element_spin = QDoubleSpinBox()
         self.rel_element_spin.setRange(1.0, 5.0)
@@ -300,6 +398,19 @@ class MarcotApp(QWidget):
         self.f_cam_mm_locked = QCheckBox("Lock")
         self.f_cam_mm_locked.setChecked(True)
         
+        self.f_coll_mm_spin = QDoubleSpinBox()
+        self.f_coll_mm_spin.setRange(1, 1000)
+        self.f_coll_mm_spin.setSingleStep(0.1)
+        self.f_coll_mm_spin.setValue(536.07)
+        
+        self.incident_angle_spin = QDoubleSpinBox()
+        self.incident_angle_spin.setRange(0, 360)
+        self.incident_angle_spin.setSingleStep(0.1)
+        self.incident_angle_spin.setValue(75.2)
+        
+        self.slicer_checkbox = QCheckBox("Use of slicer")
+        self.slicer_checkbox.setChecked(True)
+        
         self.nir_arm_checkbox = QCheckBox("NIR channel")
         
         advanced_layout.addWidget(QLabel("Grooves per mm"), 0, 0)
@@ -309,29 +420,31 @@ class MarcotApp(QWidget):
         advanced_layout.addWidget(self.resolution_label, 1, 0)
         advanced_layout.addWidget(self.resolution_slider, 1, 1)
         advanced_layout.addWidget(self.resolution_locked, 1, 2)
-
-        advanced_layout.addWidget(QLabel("Magnification factor"), 2, 0)
-        advanced_layout.addWidget(self.mag_factor_spin, 2, 1)
-        advanced_layout.addWidget(self.mag_locked, 2, 2)
         
-        advanced_layout.addWidget(QLabel("Beam diameter (mm)"), 3, 0)
-        advanced_layout.addWidget(self.beam_size_mm_spin, 3, 1)
-        advanced_layout.addWidget(self.beam_size_locked, 3, 2)
-
-        advanced_layout.addWidget(QLabel("Pixel size (µm)"), 4, 0)
-        advanced_layout.addWidget(self.pixel_size_um_spin, 4, 1)
-        advanced_layout.addWidget(self.pixel_size_locked, 4, 2)
+        advanced_layout.addWidget(QLabel("Beam diameter (mm)"), 2, 0)
+        advanced_layout.addWidget(self.beam_size_mm_spin, 2, 1)
+        advanced_layout.addWidget(self.beam_size_locked, 2, 2)
         
-        advanced_layout.addWidget(QLabel("Resolution element (px)"), 5, 0)
-        advanced_layout.addWidget(self.rel_element_spin, 5, 1)
-        advanced_layout.addWidget(self.rel_element_locked, 5, 2)
+        advanced_layout.addWidget(QLabel("Resolution element (px)"), 3, 0)
+        advanced_layout.addWidget(self.rel_element_spin, 3, 1)
+        advanced_layout.addWidget(self.rel_element_locked, 3, 2)
 
         
-        advanced_layout.addWidget(QLabel("Focal length camera (mm)"), 6, 0)
-        advanced_layout.addWidget(self.f_cam_mm_spin, 6, 1)
-        advanced_layout.addWidget(self.f_cam_mm_locked, 6, 2)
+        advanced_layout.addWidget(QLabel("Focal length camera (mm)"), 4, 0)
+        advanced_layout.addWidget(self.f_cam_mm_spin, 4, 1)
+        advanced_layout.addWidget(self.f_cam_mm_locked, 4, 2)
+        
+        advanced_layout.addWidget(QLabel("Focal length collimator (mm)"), 5, 0)
+        advanced_layout.addWidget(self.f_coll_mm_spin, 5, 1)
+
+        advanced_layout.addWidget(QLabel("Incident Angle on Grating (deg)"), 6, 0)
+        advanced_layout.addWidget(self.incident_angle_spin, 6, 1)
+        
+        advanced_layout.addWidget(self.slicer_checkbox, 7, 0)
         
         advanced_layout.addWidget(self.nir_arm_checkbox, 7, 1)
+        
+        advanced_layout.addWidget(self.echelle_checkbox, 7, 2)
 
         self.advanced_frame.setLayout(advanced_layout)
         layout.addWidget(self.advanced_frame)
@@ -438,22 +551,55 @@ class MarcotApp(QWidget):
     def toggle_advanced_params(self, checked):
         if checked:
             self.advanced_frame.show()
-            self.advanced_button.setText("Hide advanced parameters")
+            self.advanced_button.setText("Hide spectograph parameters")
         else:
             self.advanced_frame.hide()
-            self.advanced_button.setText("Show advanced parameters")
+            self.advanced_button.setText("Show spectograph parameters")
+            
+    def _on_slider(self, ivalue: int):
+        fvalue = ivalue / self.SCALE
+        if abs(self.module_diam.value() - fvalue) > 1e-12:
+            self.module_diam.blockSignals(True)
+            self.module_diam.setValue(fvalue)
+            self.module_diam.blockSignals(False)
 
-    def update_module_diam_label(self):
-        val = self.module_diam_slider.value()
-        self.module_diam_label.setText(f"Module diameter (m): {val}")
-        
+    def _on_slider_tel(self, ivalue: int):
+        fvalue = ivalue / self.SCALE
+        if abs(self.telescope_aperture.value() - fvalue) > 1e-12:
+            self.telescope_aperture.blockSignals(True)
+            self.telescope_aperture.setValue(fvalue)
+            self.telescope_aperture.blockSignals(False)
+
+    def _on_spin(self, fvalue: float):
+        ivalue = int(round(fvalue * self.SCALE))
+        if self.module_diam_slider.value() != ivalue:
+            self.module_diam_slider.blockSignals(True)
+            self.module_diam_slider.setValue(ivalue)
+            self.module_diam_slider.blockSignals(False)
+            
+    def _on_spin_tel(self, fvalue: float):
+        ivalue = int(round(fvalue * self.SCALE))
+        if self.telescope_aperture_slider.value() != ivalue:
+            self.telescope_aperture_slider.blockSignals(True)
+            self.telescope_aperture_slider.setValue(ivalue)
+            self.telescope_aperture_slider.blockSignals(False)
+            
+    def sync_checkboxes_a(self, checked):
+        if checked:
+            self.pseudoslit_checkbox.blockSignals(True)
+            self.pseudoslit_checkbox.setChecked(False)
+            self.pseudoslit_checkbox.blockSignals(False)
+
+    def sync_checkboxes_b(self, checked):
+        if checked:
+            self.superpl_checkbox.blockSignals(True)
+            self.superpl_checkbox.setChecked(False)
+            self.superpl_checkbox.blockSignals(False)
+
+                
     def update_resolution_label(self):
         val = self.resolution_slider.value()
         self.resolution_label.setText(f"Resolving power: {val}")
-        
-    def update_telescope_aperture_label(self):
-        val = self.telescope_aperture_slider.value()
-        self.telescope_aperture_label.setText(f"Telescope aperture (m): {val}")
 
     def show_plot_at_index(self, index):
         if 0 <= index < len(self.graph_images):
@@ -478,16 +624,19 @@ class MarcotApp(QWidget):
     def run_calculations(self):
         try:
             params = [
-                float(self.module_diam_slider.value()),
+                float(self.module_diam.value()),
                 float(self.f_number_out_spin.value()),
                 int(self.f_number_out_locked.isChecked()),
                 float(self.d_core_out_spin.value()),
                 int(self.d_core_out_locked.isChecked()),
-                float(self.telescope_aperture_slider.value()),
+                float(self.telescope_aperture.value()),
+                float(self.focal_adapter_spin.value()),
+                int(self.focal_adapter_locked.isChecked()),
                 float(self.seeing_spin.value()),
                 float(self.sky_aperture_spin.value()),
                 int(self.sky_aperture_locked.isChecked()),
                 self.tiptilt_checkbox.isChecked(),
+                self.PL_effi_checkbox.isChecked(),
                 float(self.encircled_spin.value()),
                 int(self.lambda_min_spin.value()),
                 int(self.lambda_max_spin.value()),
@@ -495,12 +644,16 @@ class MarcotApp(QWidget):
                 self.superpl_checkbox.isChecked(),
                 float(self.grooves_mm_spin.value()),
                 float(self.resolution_slider.value()),
-                float(self.mag_factor_spin.value()),
                 float(self.beam_size_mm_spin.value()),
+                int(self.beam_size_locked.isChecked()),
                 float(self.pixel_size_um_spin.value()),
                 float(self.rel_element_spin.value()),
+                self.slicer_checkbox.isChecked(),
                 float(self.f_cam_mm_spin.value()),
                 int(self.f_cam_mm_locked.isChecked()),
+                float(self.f_coll_mm_spin.value()),
+                float(self.incident_angle_spin.value()),
+                int(self.echelle_checkbox.isChecked()),
                 self.nir_arm_checkbox.isChecked()
             ]
 
@@ -579,8 +732,18 @@ class MarcotApp(QWidget):
                 print_results(results)
             output_text = buffer.getvalue()
 
-
-            snr_fraction = snr_cal("data/results_marcot.csv")
+            params_detector = [
+                float(self.plate_scale_spin.value()),
+                float(self.R_noise_spin.value()),
+                float(self.g_spin.value()),
+                float(self.pixel_size_um_spin.value()),
+                float(self.sky_aperture_spin.value()),
+                float(self.DARK_spin.value()),
+                float(self.QE_spin.value()),
+                int(self.slicer_checkbox.isChecked()),
+                int(self.superpl_checkbox.isChecked())
+            ]
+            snr_fraction = snr_cal("data/results_marcot.csv", *params_detector)
             snr_val = float(np.asarray(snr_fraction).ravel()[0])
 
             output_text += f"\nSNR Fraction: {snr_val:.3f}\n"
