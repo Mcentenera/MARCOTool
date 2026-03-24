@@ -654,12 +654,16 @@ def snr_cal(archive, plate_scale, R_noise, g, pix_size, FoV, DARK, QE, slicer, s
     
 
     fiber_core_mm_MARCOT = (df['Selected commercial output core (microns)'].values) * 1e-3
+    
+    fiber_core_in_mm = (df['Selected commercial input core (microns)'].values) * 1e-3
 
-    fiber_core_mm_MARCOT_2 =(df['Selected commercial output core 2-stage (microns)'].values) * 1e-3
+    #fiber_core_mm_MARCOT_2 =(df['Selected commercial output core 2-stage (microns)'].values) * 1e-3
     
     e_fiber_core_mm_MARCOT = (df['Uncer Selected commercial output core (microns)'].values) * 1e-3
+    e_fiber_core_in_mm = (df['Uncer Selected commercial input core (microns)'].values) * 1e-3
     
     n_modules = df['Total modules'].values
+    n_OTAs = df['Number of OTAs'].values
     
     t_exp = 100 # Exposure time [s]
     pix_size = pix_size * 1e-3
@@ -697,20 +701,20 @@ def snr_cal(archive, plate_scale, R_noise, g, pix_size, FoV, DARK, QE, slicer, s
     e_N_ADU_MARCOT = N_ADU_MARCOT * np.sqrt((0.1 / t_exp) ** 2 + (0.001 / efi_sys_MARCOT) ** 2 + (2 * 0.1 / module_diameter_m) ** 2 + (0.01 * 1e-12/ F_obs_J) ** 2 + ((2 * l_fin * 0.01 * 1e-6) ** 2 + (2 * l_ini * 0.01 * 1e-6) ** 2) ** 2 / ((l_fin ** 2 - l_ini ** 2) ** 2))
     
     if slicer == True:
-        SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT_2 * 0.5, 1) + N_ADU_MARCOT / g)
-        SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT * 0.5, n_modules) + N_ADU_PSEU / g)
+        SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT * 0.5, 1) + N_ADU_MARCOT / g)
+        SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_in_mm * 0.5, n_modules * n_OTAs) + N_ADU_PSEU / g)
     else:
-        SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT_2, 1) + N_ADU_MARCOT / g)
-        SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT, n_modules) + N_ADU_PSEU / g)
+        SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT, 1) + N_ADU_MARCOT / g)
+        SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_in_mm, n_modules * n_OTAs) + N_ADU_PSEU / g)
 
     
     
-    values_MARCOT = {'ADU': N_ADU_MARCOT, 'g': g, 'd': fiber_core_mm_MARCOT_2, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
+    values_MARCOT = {'ADU': N_ADU_MARCOT, 'g': g, 'd': fiber_core_mm_MARCOT, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
     sigmas_MARCOT = {'ADU': e_N_ADU_MARCOT, 'g': 0.1, 'd': e_fiber_core_mm_MARCOT, 'p': 0.1e-3, 'D': 0.1, 't': 0.1, 'R': 0.1}
     
     
-    values_PSEU = {'ADU': N_ADU_PSEU, 'g': g, 'd': fiber_core_mm_MARCOT, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
-    sigmas_PSEU = {'ADU': e_N_ADU_PSEU, 'g': 0.1, 'd': e_fiber_core_mm_MARCOT, 'p': 0.1e-3, 'D': 0.1, 't': 0.1, 'R': 0.1}
+    values_PSEU = {'ADU': N_ADU_PSEU, 'g': g, 'd': fiber_core_in_mm, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
+    sigmas_PSEU = {'ADU': e_N_ADU_PSEU, 'g': 0.1, 'd': e_fiber_core_in_mm, 'p': 0.1e-3, 'D': 0.1, 't': 0.1, 'R': 0.1}
         
 
     def sigma_snr(values, sigmas):
@@ -781,186 +785,6 @@ def snr_cal(archive, plate_scale, R_noise, g, pix_size, FoV, DARK, QE, slicer, s
         
     return value_to_save
 
-    
-def snr_cal_2(archive):
-    # Detector paremeters (CARMENES-VIS)
-    df = pd.read_csv('data/results_marcot.csv', sep = '\t')
-    try:
-        def parse_array(x):
-            if not isinstance(x, str) or not re.search(r'\d', x):
-                return x
-            x = x.strip("[] \n\t")
-            return np.fromstring(x, sep=' ')
-        df['Selected commercial output core (microns)'] = df['Selected commercial output core (microns)'].apply(parse_array)
-        df['Selected commercial input core (microns)'] = df['Selected commercial input core (microns)'].apply(parse_array)
-        df['Selected commercial output core 2-stage (microns)'] = df['Selected commercial ouput core 2-stage (microns)'].apply(parse_array)
-        df['Selected commercial output core (microns)'] = df['Selected commercial ouput core (microns)'].apply(parse_array)
-        df['Magnification factor'] = df['Magnification factor'].apply(parse_array)
-        df['Focal length (mm)'] = df['Focal length (mm)'].apply(parse_array)
-        df['Pixel size (microns)'] = df['Pixel size (microns)'].apply(parse_array)
-        df['Number of OTA for high efficiency'] = df['Number of OTA for high efficiency'].apply(parse_array)
-        df['Total modules'] = df['Total modules'].apply(parse_array)
-        
-        # ESTO HAY QUE CAMBIARLO PARA QUE NO HAYA QUE METER LOS PARÁMETROS UNO A UNO, SINO QUE LE LOOP PASE POR TODAS
-    except Exception as e:
-        print(f'\033[4;93;1mWARNING: Error in column: {str(e)}\033[0m')
-        return None
-    
-    module_diameter_m = df['Module diameter (m)'].iloc[0]
-    com_core_in = df['Selected commercial input core (microns)'].iloc[0] * 1e-6
-    efi_sys_MARCOT = 0.9
-    # CAMBIAR A UN VALOR MEJOR CUANDO EL stimator.py CALCULE AL EFICIENCIA DLE SISTEMA DE MARCOT
-    fiber_core_m_MARCOT = (df['Selected commercial output core (microns)'].iloc[0]) * 1e-6
-    # CUIDADO QUE EL VALOR QUE COJO DE df ESTÁ EN um Y NO EN mm
-    magnification_factor = df['Magnification factor'].iloc[0]
-    f_cam = df['Focal length camera (mm)'].iloc[0]
-    n_fiber_total = df['Number of OTA for high efficiency'].iloc[0]
-    total_modules = df['Total modules'].iloc[0]
-    com_core_out_2 = (df['Selected commercial output core 2-stage (microns)'].iloc[0]) * 1e-6
-    com_core_out = (df['Selected commercial output core (microns)'].iloc[0]) * 1e-6
-        
-    t_exp = 100 # Exposure time [s]
-    plate_scale = 0.169 # Plate scale [mm/"]
-    R_noise = 5 # Read noise [e-]
-    g = 1 # Ganancia [e-/ADU]
-    pix_size = df['Pixel size (microns)'].iloc[0] # Pixel size [mm]
-    DARK = 3 # DARK current [e-/s]
-    QE = 0.92 # Quatum efficiency
-    R = 94600
-    
-    def n_pix(magnification_factor, pix_size, fiber_core_mm, f_cam, R, theta_i, grating):
-        Theta_B = np.arctan(grating)
-        theta_d = 2 * Theta_B - theta_i
-        n_spa = 1.5 * ((magnification_factor * fiber_core_mm / 2) / (pix_size * 1e-6)) # Pixel in spatial direction. Divide by 2 because we have an image slicer
-        n_dis = (f_cam * 1e-3 / (pix_size * 1e-6 * R)) * (np.sin(theta_i) / np.cos(theta_d) + np.tan(theta_d))# Pixel in dispertion direction
-        return n_spa * n_dis
-
-
-    def N_det(DARK, t_exp, g, R_noise, magnification_factor, n_fiber_total, pix_size, fiber_core_mm, f_cam, R, theta_i, grating):
-        return n_fiber_total * n_pix(magnification_factor, pix_size, fiber_core_mm, f_cam, R, theta_i, grating) * ((DARK / g) * t_exp + (R_noise / g) ** 2)
-
-    # Parameters for a random object J02530+168
-
-    l_ini = 1.1e-6 # Beginning od the J band [m]
-    l_fin = 1.4e-6 # End of the J band [m]
-    hc = 1.98644586e-25 # Speed light and Planck cte [J/m]
-    F_obs_J = 1.277494916846618e-12 # Observational magnitude [W/m2/um]
-
-
-    # Define the function inside the integral
-    def function(x):
-        return x
-
-    def signal(module_diameter_m, efi_sys, hc, QE, l_ini, l_fin, F_obs_J):
-        result, error = quad(function, l_ini, l_fin)
-        n_adu = (np.pi * ((module_diameter_m / 2) ** 2) * efi_sys) / hc * F_obs_J * QE * result
-        return n_adu
-
-    N_ADU_PSEU = signal(module_diameter_m, 0.94, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
-    SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, n_fiber_total, pix_size, com_core_in, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_PSEU / g)
-        
-    N_ADU_PL = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
-    SNR_PL = (N_ADU_PL / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, 1, pix_size, fiber_core_m_MARCOT, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_PL / g)
-    
-    N_ADU_TRAD = signal(module_diameter_m, 0.94, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
-    SNR_TRAD = (N_ADU_TRAD / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, 1, pix_size, 100e-3, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_TRAD / g)
-    
-    N_ADU_MARCOT = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
-    
-    SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, total_modules, pix_size, fiber_core_mm_MARCOT, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_MARCOT / g)
-    
-    N_ADU_PSEU_2 = signal(module_diameter_m, 0.94, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
-    SNR_PSEU_2 = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, n_modules_total, pix_size, com_core_out, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_PSEU / g)
-        
-    N_ADU_PL_2 = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
-    SNR_PL_2 = (N_ADU_PL / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, magnification_factor, 1, pix_size, com_core_out_2, f_cam, R, 75.2 * np.pi / 180, 4) + N_ADU_PL / g)
-    
-    df['SNR fraction'] = None
-
-    df.at[0, 'SNR fraction'] = SNR_MARCOT / SNR_TRAD
-
-    #df.to_csv('data/results_marcot.csv', sep='\t', index=False)
-    
-    df['SNR PL vs pseu fraction'] = None
-
-    df.at[0, 'SNR PL vs pseu fraction'] = SNR_PL / SNR_PSEU
-
-    # df.to_csv('data/results_marcot.csv', sep='\t', index=False)
-    
-    df['SNR PL vs pseu fraction 2-stage'] = None
-
-    df.at[0, 'SNR PL vs pseu fraction 2-stage'] = SNR_PL_2 / SNR_PSEU_2
-
-    df.to_csv('data/results_marcot.csv', sep='\t', index=False)
-        
-    return SNR_PL / SNR_PSEU, SNR_MARCOT / SNR_TRAD, SNR_PL_2 / SNR_PSEU_2
-    
-#def tables(self):
-#    df_decision_matrix = pd.read_csv('data/decision_matrix.csv', sep='\t')
-#    df_results = pd.read_csv('data/results_marcot.csv', sep='\t')
-#    # df_table = pd.read_csv('data/table_dm.txt', sep='\t')
-    
-#    shape = np.shape(df_decision_matrix)
-  
-#    output_file = "data/table_dm.txt"
-    
-    latex_code = []
-    
-    latex_code.append("\\begin{table}")
-    latex_code.append("\\centering")
-    # latex_code.append("\\begin{tabular}{|" + " | ".join(["c"] * shape[1]) + "|}")
-    latex_code.append("\\begin{tabular}{" + "|".join(["c"] * (shape[1] - 1)) + "}")
-    latex_code.append("\\hline")
-    
-    # --- Conversión de columnas con arrays ---
-    list_columns = [col for col in df_decision_matrix.columns if df_decision_matrix[col].dtype == object and df_decision_matrix[col].astype(str).str.startswith('[').any()]
-    
-    latex_code.append("\\textbf{" + "} & \\textbf{".join(list_columns) + "} \\\\")
-    
-    for i in range(0, shape[0]):
-        df_decision_matrix.iloc[i]
-        def parse_array(x):
-            if not isinstance(x, str) or not re.search(r'\d', x):
-                return x
-            x = x.strip("[] \n\t")
-            return np.fromstring(x, sep=' ')
-            df_decision_matrix[col] = df_decision_matrix[col].apply(parse_array)
-            
-    latex_code.append("\\hline")
-    
-    value_matrix = []
-    
-    # --- Read the columns ---
-    for col in list_columns:
-        col_data = df_decision_matrix[col]
-        has_array = col_data.apply(lambda x: isinstance(x, (list, np.ndarray))).any()
-        if has_array:
-            all_values = np.concatenate(col_data.apply(lambda x: np.array(x) if isinstance(x, (list, np.ndarray)) else np.array([x])))
-            value_matrix.append(all_values[0])
-            # latex_code.append(" & ".join(all_values) + " \\\\")
-        else:
-            value_matrix.append(col_data[0])
-            # latex_code.append(" & ".join(col_data) + " \\\\")
-            
-    value_matrix = np.array([np.fromstring(row.strip('[]'), sep=' ') for row in value_matrix])
-    value_matrix = value_matrix.T
-    value_matrix = value_matrix.astype(str)
-        
-    shape = np.shape(value_matrix)
-    
-    for i in range(0, shape[0]):
-        latex_code.append(" & ".join(value_matrix[i]) + " \\\\")
-    
-    latex_code.append("\\hline")
-    latex_code.append("\\end{tabular}")
-    latex_code.append("\\caption{Decision matrix}")
-    latex_code.append("\\label{tab:decision_matrix}")
-    latex_code.append("\\end{table}")
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        for line in latex_code:
-            f.write(line + "\n")
-    
 
 def tables(criteria):
 
@@ -1139,7 +963,7 @@ def tables(criteria):
     columns_MABAC.append(df_mrc_MABAC['Alternative'].values)
     
     index_name = ['St. Variance', 'CRITIC', 'MEREC']
-    
+        
     header_cells = [rf"\textbf{{{c}}}" for c in index_name]
         
     header_line_1 = r"\multicolumn{4}{c|}{\textbf{TOPSIS}}" + " & " + r"\multicolumn{4}{c}{\textbf{MABAC}}" + r"\\"
