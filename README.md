@@ -40,30 +40,37 @@ python MARCOTool.py
 Default parameters has beeen choosen as MARCOT-Pathfinder telescope.
 
 ```
-module_diameter_m = 5,
-f_number_out = 3.5,
-f_number_out_locked = True,
-d_core_out = 100,
-d_core_out_locked = False,
-telescope_aperture_m = 15,
-seeing_fwhm_arcsec = 1.0,
-sky_aperture = 1.5,
-sky_aperture_locked = True,
-use_tip_tilt = False,
-target_encircled_energy = 0.95,
-wavelength_min_nm = 500,
-wavelength_max_nm = 1000,
-pseudoslit = True,
-super_pl = False,
-grooves_mm = 31.60,
-resolution = 100000,
-magnification_factor = 1.2,
-beam_diameter_mm = 154.80,
-pixel_size = 15.0,
-rel_element = 2.8,
-f_cam_mm = 455.0,
-f_cam_mm_locked = True,
-nir_arm = False
+    module_diameter_m = 5
+    f_number_out = 3.5
+    f_number_out_locked = True
+    d_core_out = 100
+    d_core_out_locked = False
+    telescope_aperture_m = 15
+    focal_adapter = 5
+    focal_adapter_locked = True
+    seeing_fwhm_arcsec = 1
+    sky_aperture = 1.5
+    sky_aperture_locked = True
+    use_tip_tilt = False
+    maximixe_PL = False
+    target_encircled_energy = 0.95
+    wavelength_min_nm = 550
+    wavelength_max_nm = 1050
+    pseudoslit = True
+    super_pl = False
+    grooves_mm = 31.6
+    resolution_power = 82000
+    beam_diameter_mm = 154.80
+    beam_diameter_mm_locked = False
+    pixel_size = 15
+    rel_element = 2.8
+    slicer = True
+    f_cam_mm = 455
+    f_cam_mm_locked = True
+    f_coll_mm = 536.07
+    incident_angle = 75.2
+    echelle = True
+    nir_arm = False
 
 ```
 
