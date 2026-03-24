@@ -301,10 +301,7 @@ def multi_criteria(results_csv_path, criteria):
     I_criteria_st = []
     I_criteria_crt = []
     I_criteria_mcr = []
-    I_criteria_equ = []
-    
-    equ_weights = np.linspace(1/7, 1/7, 7)
-    
+        
     for j, crit in enumerate(criteria):
         st_fuzzy_values = df_decision_matrix[crit + "_norm_st"].values
         st_fuzzy_values = np.vstack(st_fuzzy_values)
@@ -315,24 +312,20 @@ def multi_criteria(results_csv_path, criteria):
         I_alternative_st = []
         I_alternative_crt = []
         I_alternative_mcr = []
-        I_alternative_equ = []
-        
+
         for i in range(0, len_alternative):
             I_alternative_st.append(st_fuzzy_values[i] * st_variance_weight[j,:])
             I_alternative_crt.append(st_fuzzy_values[i] * CRITIC_weight[j,:])
             I_alternative_mcr.append(st_fuzzy_values[i] * MEREC_weight[j,:])
-            I_alternative_equ.append(st_fuzzy_values_defu[i] * equ_weights[j])
 
         I_criteria_st.append(np.array(I_alternative_st))
         I_criteria_crt.append(np.array(I_alternative_crt))
         I_criteria_mcr.append(np.array(I_alternative_mcr))
-        I_criteria_equ.append(np.array(I_alternative_equ))
 
 
     I_criteria_st = np.array(I_criteria_st)
     I_criteria_crt = np.array(I_criteria_crt)
     I_criteria_mcr = np.array(I_criteria_mcr)
-    I_criteria_equ = np.array(I_criteria_equ)
     
     A_star_st = np.array(np.max(I_criteria_st[:, :, 2], axis = 1))
     A_less_st = np.array(np.min(I_criteria_st[:, :, 0], axis = 1))
@@ -340,20 +333,16 @@ def multi_criteria(results_csv_path, criteria):
     A_less_crt = np.array(np.min(I_criteria_crt[:, :, 0], axis = 1))
     A_star_mrc = np.array(np.max(I_criteria_mcr[:, :, 2], axis = 1))
     A_less_mrc = np.array(np.min(I_criteria_mcr[:, :, 0], axis = 1))
-    A_star_equ = np.array(np.max(I_criteria_equ, axis = 1))
-    A_less_equ = np.array(np.min(I_criteria_equ, axis = 1))
     
     # Calculate teh border approximation area (MABAC)
     g_st = (np.prod(I_criteria_st, axis=1)) ** (1 / len_alternative)
     g_crt = (np.prod(I_criteria_crt, axis=1)) ** (1 / len_alternative)
     g_mrc = (np.prod(I_criteria_mcr, axis=1)) ** (1 / len_alternative)
-    g_equ = (np.prod(I_criteria_equ, axis=1)) ** (1 / len_alternative)
-
+    
     # Calculate the distances (MABAC)
     q_st = I_criteria_st - g_st[:, np.newaxis, :]
     q_crt = I_criteria_crt - g_crt[:, np.newaxis, :]
     q_mrc = I_criteria_mcr - g_mrc[:, np.newaxis, :]
-    q_equ = I_criteria_equ - g_equ[:, np.newaxis]
     
     # Calculate the total score (MABAC)
     S_st = sum(q_st)
@@ -362,7 +351,6 @@ def multi_criteria(results_csv_path, criteria):
     S_crt = (S_crt[:,0] + 4 * S_crt[:,1] + S_crt[:,2]) / 6
     S_mrc = sum(q_mrc)
     S_mrc = (S_mrc[:,0] + 4 * S_mrc[:,1] + S_mrc[:,2]) / 6
-    S_equ = sum(q_equ)
 
     df["score_total_st_MABAC"] = pd.Series(S_st, index=range(S_st.size))
     
@@ -377,8 +365,6 @@ def multi_criteria(results_csv_path, criteria):
     d_less_crt = []
     d_star_mrc = []
     d_less_mrc = []
-    d_star_equ = []
-    d_less_equ = []
     
     for j, crit in enumerate(criteria):
         i_st = I_criteria_st[j]
@@ -393,19 +379,13 @@ def multi_criteria(results_csv_path, criteria):
         a_star_mrc = A_star_mrc[j]
         a_less_mrc = A_less_mrc[j]
         
-        i_equ = I_criteria_equ[j]
-        a_star_equ = A_star_equ[j]
-        a_less_equ = A_less_equ[j]
-        
         d_star_st.append(np.sqrt(1/3 * ((a_star_st - i_st[:,0]) ** 2 + (a_star_st - i_st[:,1]) ** 2 + (a_star_st - i_st[:,2]) ** 2)))
         d_star_crt.append(np.sqrt(1/3 * ((a_star_crt - i_crt[:,0]) ** 2 + (a_star_crt - i_crt[:,1]) ** 2 + (a_star_crt - i_crt[:,2]) ** 2)))
         d_star_mrc.append(np.sqrt(1/3 * ((a_star_mrc - i_mrc[:,0]) ** 2 + (a_star_mrc - i_mrc[:,1]) ** 2 + (a_star_mrc - i_mrc[:,2]) ** 2)))
-        d_star_equ.append(np.sqrt((a_star_equ - i_equ) ** 2))
         
         d_less_st.append(np.sqrt(1/3 * ((a_less_st - i_st[:,0]) ** 2 + (a_less_st - i_st[:,1]) ** 2 + (a_less_st - i_st[:,2]) ** 2)))
         d_less_crt.append(np.sqrt(1/3 * ((a_less_crt - i_crt[:,0]) ** 2 + (a_less_crt - i_crt[:,1]) ** 2 + (a_less_crt - i_crt[:,2]) ** 2)))
         d_less_mrc.append(np.sqrt(1/3 * ((a_less_mrc - i_mrc[:,0]) ** 2 + (a_less_mrc - i_mrc[:,1]) ** 2 + (a_less_mrc - i_mrc[:,2]) ** 2)))
-        d_less_equ.append(np.sqrt((a_less_equ - i_equ) ** 2))
         
         
     D_star_st = sum(d_star_st)
@@ -414,13 +394,11 @@ def multi_criteria(results_csv_path, criteria):
     D_less_crt = sum(d_less_crt)
     D_star_mrc = sum(d_star_mrc)
     D_less_mrc = sum(d_less_mrc)
-    D_star_equ = sum(d_star_equ)
-    D_less_equ = sum(d_less_equ)
+
     
     CC_st = D_less_st / (D_less_st + D_star_st)
     CC_crt = D_less_crt / (D_less_crt + D_star_crt)
     CC_mrc = D_less_mrc / (D_less_mrc * D_star_mrc)
-    CC_equ = D_less_equ / (D_less_equ * D_star_equ)
 
     df["score_total_st_TOPSIS"] = pd.Series(CC_st, index=range(CC_st.size))
     
@@ -656,7 +634,7 @@ def multi_criteria(results_csv_path, criteria):
     
     return st_variance_weight, st_variance_weight_defu, CRITIC_weight, CRITIC_weight_defu, MEREC_weight, MEREC_weight_defu, criteria
     
-def snr_cal(archive):
+def snr_cal(archive, plate_scale, R_noise, g, pix_size, FoV, DARK, QE, slicer, super_pl):
     # Detector paremeters (CARMENES-VIS)
     df = pd.read_csv('data/results_marcot.csv', sep = '\t')
     
@@ -672,29 +650,29 @@ def snr_cal(archive):
     #   return None
     
     module_diameter_m = df['Module diameter (m)'].values
-    efi_sys_MARCOT = 0.9
-    # CAMBIAR A UN VALOR MEJOR CUANDO EL stimator.py CALCULE AL EFICIENCIA DLE SISTEMA DE MARCOT
+    efi_sys_MARCOT = df['Expected efficiency'].values
+    
+
     fiber_core_mm_MARCOT = (df['Selected commercial output core (microns)'].values) * 1e-3
+
+    fiber_core_mm_MARCOT_2 =(df['Selected commercial output core 2-stage (microns)'].values) * 1e-3
+    
     e_fiber_core_mm_MARCOT = (df['Uncer Selected commercial output core (microns)'].values) * 1e-3
-    # CUIDADO QUE EL VALOR QUE COJO DE df ESTÁ EN um Y NO EN mm
+    
+    n_modules = df['Total modules'].values
     
     t_exp = 100 # Exposure time [s]
-    plate_scale = 0.169 # Plate scale [mm/"]
-    R_noise = 5 # Read noise [e-]
-    g = 1 # Ganancia [e-/ADU]
-    pix_size = 15e-3 # Pixel size [mm]
-    FoV = 1.5 # FoV of the fibre ["]
-    DARK = 3 # DARK current [e-/s]
-    QE = 0.92 # Quatum efficiency
+    pix_size = pix_size * 1e-3
+    DARK = DARK * 1e-3
+    plate_scale = plate_scale * 1e-3
 
-
-    def N_det(DARK, t_exp, g, R_noise, fiber_core_mm):
-        n_pix = fiber_core_mm / pix_size
+    def N_det(DARK, t_exp, g, R_noise, fiber_core_mm, n_modules):
+        n_pix = n_modules * fiber_core_mm / pix_size
         return n_pix * ((DARK / g) * t_exp + (R_noise / g)**2)
 
     # Parameters for a random object J02530+168
 
-    l_ini = 1.1e-6 # Beginning od the J band [m]
+    l_ini = 1.1e-6 # Beginning of the J band [m]
     l_fin = 1.4e-6 # End of the J band [m]
     hc = 1.98644586e-25 # Speed light and Planck cte [J/m]
     F_obs_J = 1.277494916846618e-12 # Observational magnitude [W/m2/um]
@@ -709,24 +687,30 @@ def snr_cal(archive):
         n_adu = (np.pi * ((module_diameter_m / 2) ** 2) * efi_sys) / hc * F_obs_J * QE * result
         return n_adu
 
-    N_ADU_TRAD = signal(module_diameter_m, 0.94, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
-    e_N_ADU_TRAD = N_ADU_TRAD * np.sqrt((0.1 / t_exp) ** 2 + (0.001 / 0.94) ** 2 + (2 * 0.1 / module_diameter_m) ** 2 + (0.01 * 1e-12/ F_obs_J) ** 2 + ((2 * l_fin * 0.01 * 1e-6) ** 2 + (2 * l_ini * 0.01 * 1e-6) ** 2) ** 2 / ((l_fin ** 2 - l_ini ** 2) ** 2))
+    N_ADU_PSEU = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
     
-    SNR_TRAD = (N_ADU_TRAD / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, 100 * 1e-3) + N_ADU_TRAD / g)
+    e_N_ADU_PSEU = N_ADU_PSEU * np.sqrt((0.1 / t_exp) ** 2 + (0.001 / efi_sys_MARCOT) ** 2 + (2 * 0.1 / module_diameter_m) ** 2 + (0.01 * 1e-12/ F_obs_J) ** 2 + ((2 * l_fin * 0.01 * 1e-6) ** 2 + (2 * l_ini * 0.01 * 1e-6) ** 2) ** 2 / ((l_fin ** 2 - l_ini ** 2) ** 2))
+    
     
     N_ADU_MARCOT = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
     
     e_N_ADU_MARCOT = N_ADU_MARCOT * np.sqrt((0.1 / t_exp) ** 2 + (0.001 / efi_sys_MARCOT) ** 2 + (2 * 0.1 / module_diameter_m) ** 2 + (0.01 * 1e-12/ F_obs_J) ** 2 + ((2 * l_fin * 0.01 * 1e-6) ** 2 + (2 * l_ini * 0.01 * 1e-6) ** 2) ** 2 / ((l_fin ** 2 - l_ini ** 2) ** 2))
     
-    SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT) + N_ADU_MARCOT / g)
+    if slicer == True:
+        SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT_2 * 0.5, 1) + N_ADU_MARCOT / g)
+        SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT * 0.5, n_modules) + N_ADU_PSEU / g)
+    else:
+        SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT_2, 1) + N_ADU_MARCOT / g)
+        SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT, n_modules) + N_ADU_PSEU / g)
+
     
     
-    values_MARCOT = {'ADU': N_ADU_MARCOT, 'g': g, 'd': fiber_core_mm_MARCOT, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
+    values_MARCOT = {'ADU': N_ADU_MARCOT, 'g': g, 'd': fiber_core_mm_MARCOT_2, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
     sigmas_MARCOT = {'ADU': e_N_ADU_MARCOT, 'g': 0.1, 'd': e_fiber_core_mm_MARCOT, 'p': 0.1e-3, 'D': 0.1, 't': 0.1, 'R': 0.1}
     
     
-    values_TRAD = {'ADU': N_ADU_TRAD, 'g': g, 'd': 100 * 1e-3, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
-    sigmas_TRAD = {'ADU': e_N_ADU_TRAD, 'g': 0.1, 'd': 0.1 * 1e-3, 'p': 0.1e-3, 'D': 0.1, 't': 0.1, 'R': 0.1}
+    values_PSEU = {'ADU': N_ADU_PSEU, 'g': g, 'd': fiber_core_mm_MARCOT, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
+    sigmas_PSEU = {'ADU': e_N_ADU_PSEU, 'g': 0.1, 'd': e_fiber_core_mm_MARCOT, 'p': 0.1e-3, 'D': 0.1, 't': 0.1, 'R': 0.1}
         
 
     def sigma_snr(values, sigmas):
@@ -783,12 +767,10 @@ def snr_cal(archive):
     
     df['SNR fraction'] = None
     df['Uncer SNR fraction'] = None
-
-    #df['SNR fraction'] = pd.Series([float(SNR_MARCOT / SNR_TRAD)] * target_len)
     
     
-    value_to_save = (SNR_MARCOT / SNR_TRAD)
-    uncer_to_save = value_to_save * np.sqrt((sigma_snr(values_MARCOT, sigmas_MARCOT) / SNR_MARCOT) ** 2 + (sigma_snr(values_TRAD, sigmas_TRAD) / SNR_TRAD) ** 2)
+    value_to_save = (SNR_MARCOT / SNR_PSEU)
+    uncer_to_save = value_to_save * np.sqrt((sigma_snr(values_MARCOT, sigmas_MARCOT) / SNR_MARCOT) ** 2 + (sigma_snr(values_PSEU, sigmas_PSEU) / SNR_PSEU) ** 2)
     #value_to_save = np.asarray(value_to_save).ravel()
     
     df['SNR fraction'] = pd.Series(value_to_save, index=range(value_to_save.size))
@@ -1095,11 +1077,11 @@ def tables(criteria):
         
     txt_out = Path("data/table_weight_defu.txt")
 
-    index_name = ['St. Variance', 'CRITIC', 'MEREC']
+    index_name = ['St. Variance ($\%$)', 'CRITIC ($\%$)', 'MEREC ($\%$)']
     weights = []
-    weights.append(np.round(st_weight_defu, 3))
-    weights.append(np.round(crt_weight_defu, 3))
-    weights.append(np.round(mrc_weight_defu, 3))
+    weights.append(np.round(st_weight_defu * 100, 3))
+    weights.append(np.round(crt_weight_defu * 100, 3))
+    weights.append(np.round(mrc_weight_defu * 100, 3))
     weights = np.array(weights)
     
     header_cells = [rf"\textbf{{Criterion}}"] + [rf"\textbf{{{c}}}" for c in index_name]
@@ -1132,29 +1114,29 @@ def tables(criteria):
 
     print("\033[1;4;32mFile 'table_weight_defu.txt' was saved successfully\033[0m")
     
-    df_st_TOPSIS = pd.read_csv("data/score_total_st_TOPSIS.csv", sep='\t', header=0, index_col=0)
+    df_st_TOPSIS = pd.read_csv("data/score_total_st_TOPSIS.csv", sep='\t', header=0)
     
-    df_crt_TOPSIS = pd.read_csv("data/score_total_crt_TOPSIS.csv", sep='\t', header=0, index_col=0)
+    df_crt_TOPSIS = pd.read_csv("data/score_total_crt_TOPSIS.csv", sep='\t', header=0)
     
-    df_mrc_TOPSIS = pd.read_csv("data/score_total_mrc_TOPSIS.csv", sep='\t', header=0, index_col=0)
+    df_mrc_TOPSIS = pd.read_csv("data/score_total_mrc_TOPSIS.csv", sep='\t', header=0)
     
-    df_st_MABAC = pd.read_csv("data/score_total_st_MABAC.csv", sep='\t', header=0, index_col=0)
+    df_st_MABAC = pd.read_csv("data/score_total_st_MABAC.csv", sep='\t', header=0)
     
-    df_crt_MABAC = pd.read_csv("data/score_total_crt_MABAC.csv", sep='\t', header=0, index_col=0)
+    df_crt_MABAC = pd.read_csv("data/score_total_crt_MABAC.csv", sep='\t', header=0)
     
-    df_mrc_MABAC = pd.read_csv("data/score_total_mrc_MABAC.csv", sep='\t', header=0, index_col=0)
+    df_mrc_MABAC = pd.read_csv("data/score_total_mrc_MABAC.csv", sep='\t', header=0)
     
     txt_out = Path("data/table_ranking.txt")
     
     columns_TOPSIS = []
-    columns_TOPSIS.append(df_st_TOPSIS['OTA diameter (m)'].values)
-    columns_TOPSIS.append(df_crt_TOPSIS['OTA diameter (m)'].values)
-    columns_TOPSIS.append(df_mrc_TOPSIS['OTA diameter (m)'].values)
+    columns_TOPSIS.append(df_st_TOPSIS['Alternative'].values)
+    columns_TOPSIS.append(df_crt_TOPSIS['Alternative'].values)
+    columns_TOPSIS.append(df_mrc_TOPSIS['Alternative'].values)
     
     columns_MABAC = []
-    columns_MABAC.append(df_st_MABAC['OTA diameter (m)'].values)
-    columns_MABAC.append(df_crt_MABAC['OTA diameter (m)'].values)
-    columns_MABAC.append(df_mrc_MABAC['OTA diameter (m)'].values)
+    columns_MABAC.append(df_st_MABAC['Alternative'].values)
+    columns_MABAC.append(df_crt_MABAC['Alternative'].values)
+    columns_MABAC.append(df_mrc_MABAC['Alternative'].values)
     
     index_name = ['St. Variance', 'CRITIC', 'MEREC']
     
