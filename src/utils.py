@@ -1,580 +1,452 @@
-import pandas as pd
-import numpy as np
-import math
-from scipy.stats import pearsonr
-from scipy.integrate import quad
-import matplotlib.pyplot as plt
-import ast
-import re
-import seaborn as sns
+"""
+utils.py — Utility functions for MARCOTool.
 
+Functions
+---------
+print_results       Pretty-print the estimator results dict.
+multi_criteria      Fuzzy multi-criteria weight determination and ranking
+                    (Statistical Variance, CRITIC, MEREC) with TOPSIS and
+                    MABAC ranking methods.
+snr_cal             Compute the SNR fraction (MARCOT vs. pseudoslit) and
+                    propagate uncertainties.
+tables              Write LaTeX tables for the decision matrix, weights,
+                    defuzzified weights, and alternative ranking.
+"""
+
+import math
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from scipy.integrate import quad
+from scipy.stats import pearsonr
 
-def print_results(results):
-    def print_section(title):
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+RESULTS_CSV     = Path("data/results_marcot.csv")
+DECISION_CSV    = Path("data/decision_matrix.csv")
+SCORE_CSV       = Path("data/score_total.csv")
+FIGURES_DIR     = Path("Figures")
+
+# Physical / observational constants used in SNR calculations
+_HC             = 1.98644586e-25   # h·c  [J·m]
+_L_INI          = 1.1e-6           # J-band start [m]
+_L_FIN          = 1.4e-6           # J-band end   [m]
+_F_OBS_J        = 1.277494916846618e-12  # Flux density of J02530+168 [W/m²/µm]
+_T_EXP          = 100              # Exposure time [s]
+
+# Colour codes for terminal messages
+_GREEN  = "\033[1;4;32m"
+_YELLOW = "\033[4;93;1m"
+_RESET  = "\033[0m"
+
+# Weight-method labels
+_WEIGHT_METHODS = ["St. Variance", "CRITIC", "MEREC"]
+
+
+def _log_saved(filename: str) -> None:
+    print(f"{_GREEN}File '{filename}' was saved successfully{_RESET}")
+
+
+# ---------------------------------------------------------------------------
+# print_results
+# ---------------------------------------------------------------------------
+
+# Keywords that identify each output section
+_SECTION_KEYS = {
+    "TELESCOPE": [
+        "OTA", "Seeing", "Input", "Module", "F-number",
+        "Focal length", "Total cost tel", "Total cost for each",
+        "Weight", "Reduction cost factor",
+    ],
+    "PHOTONIC LANTERN": [
+        "Expected", "Modes", "Fibers", "Required output",
+        "Selected", "Super-PL", "Total cost PLs",
+    ],
+    "SPECTROGRAPH": [
+        "Beam diameter", "Spectrograph", "Estimated cost",
+        "Magnification", "Resolution",
+    ],
+}
+
+
+def print_results(results: dict) -> None:
+    """Pretty-print the estimator results grouped by instrument section."""
+
+    def _header(title: str) -> None:
         print(f"\n{'=' * 60}\n{title:^60}\n{'=' * 60}")
 
-    print_section("TELESCOPE")
-    keys_tel = [k for k in results if any(s in k for s in ["OTA", "Seeing", "Input", "Module", "F-number", "Focal length", "Total cost tel", "Total cost for each", "Weight", "Reduction cost factor"])]
-    for k in keys_tel:
-        print(f"{k:<45}: {results[k]}")
+    shown: list[str] = []
+    for section, keywords in _SECTION_KEYS.items():
+        _header(section)
+        keys = [k for k in results if any(s in k for s in keywords)]
+        for k in keys:
+            print(f"{k:<45}: {results[k]}")
+        shown.extend(keys)
 
-    print_section("PHOTONIC LANTERN")
-    keys_pl = [k for k in results if any(s in k for s in ["Expected", "Modes", "Fibers", "Required output", "Selected", "Super-PL", "Total cost PLs"])]
-    for k in keys_pl:
-        print(f"{k:<45}: {results[k]}")
+    _header("AUXILIARY PARAMETERS")
+    for k in results:
+        if k not in shown and k != "":
+            print(f"{k:<45}: {results[k]}")
 
-    print_section("SPECTROGRAPH")
-    keys_instr = [k for k in results if any(s in k for s in ["Beam diameter", "Spectrograph", "Estimated cost", "Magnification", "Resolution"])]
-    for k in keys_instr:
-        print(f"{k:<45}: {results[k]}")
 
-    print_section("AUXILIAR PARAMETERS")
-    other_keys = [k for k in results if k not in keys_tel + keys_pl + keys_instr and k != ""]
-    for k in other_keys:
-        print(f"{k:<45}: {results[k]}")
+# ---------------------------------------------------------------------------
+# Helpers shared by multi_criteria
+# ---------------------------------------------------------------------------
 
-def multi_criteria(results_csv_path, criteria):
-    # In case no path, we use a default path6
+def _fuzzy_column(arr: np.ndarray) -> list:
+    """Return a list of (l, m, u) numpy arrays from a stacked column."""
+    return list(map(np.array, arr))
+
+
+def _defuzzify(w: np.ndarray) -> np.ndarray:
+    """Apply the (l + 4m + u) / 6 centroid defuzzification formula."""
+    return (w[:, 0] + 4 * w[:, 1] + w[:, 2]) / 6
+
+
+def _fuzzy_weight_from_columns(col_l, col_m, col_u) -> np.ndarray:
+    """
+    Build a sorted (n_criteria × 3) fuzzy weight matrix from three
+    columns, normalised so that the defuzzified weights sum to 1.
+    """
+    w = np.column_stack([
+        col_l / np.nansum(col_u),
+        col_m / np.nansum(col_m),
+        col_u / np.nansum(col_l),
+    ])
+    return np.sort(w, axis=1)
+
+
+def _fuzzy_distance(ideal: float, weighted: np.ndarray) -> np.ndarray:
+    """Euclidean distance between a scalar ideal value and fuzzy rows."""
+    return np.sqrt(
+        (1 / 3) * (
+            (ideal - weighted[:, 0]) ** 2
+            + (ideal - weighted[:, 1]) ** 2
+            + (ideal - weighted[:, 2]) ** 2
+        )
+    )
+
+
+def _criteria_column_labels(n: int) -> list[str]:
+    """Return C1, C2, … Cn labels for LaTeX tables."""
+    return [f"C{i + 1}" for i in range(n)]
+
+
+# ---------------------------------------------------------------------------
+# multi_criteria
+# ---------------------------------------------------------------------------
+
+def multi_criteria(results_csv_path, criteria: dict):
+    """
+    Compute fuzzy weights (Statistical Variance, CRITIC, MEREC) and rank
+    alternatives with TOPSIS and MABAC.
+
+    Parameters
+    ----------
+    results_csv_path : str or Path
+        Path to the MARCOTool results TSV.
+    criteria : dict
+        Mapping of criterion name → {"type": "benefit" | "cost"}.
+
+    Returns
+    -------
+    tuple
+        (st_weight, st_weight_defu, crt_weight, crt_weight_defu,
+         mrc_weight, mrc_weight_defu, criteria)
+    """
     if results_csv_path is None:
-        results_csv_path = RES("data", "results_marcot.csv")
-        
-    df = pd.read_csv(results_csv_path, sep='\t')
-    #if criteria is None:
-    #    print('hola, no hay criteria otra vez')
-    #    criteria = [
-    #        ("Reduction cost factor", "benefit"),
-    #        ("Weight supported by the mount (kg)", "cost"),
-    #        ("Selected commercial output core (microns)", "cost"),
-    #        ("Expected efficiency", "benefit"),
-    #        ("Resolution with commercial fibers", "benefit"),
-    #        ("SNR fraction", "benefit"),
-    #        ("Number of OTA for high efficiency", "cost")
-    #    ]
-    #
-    #    criteria = {
-    #        name: {"type": kind}
-    #        for name, kind in criteria
-    #    }
+        results_csv_path = RESULTS_CSV
 
-    
-    more = []
-    less = []
-    for c, type_str in criteria.items():
-        if type_str['type'] == "benefit":
-            more.append(c)
-        else:
-            less.append(c)
-        
-    # --- Creating decision matrix ---
-    column = []
-    uncer_column = []
-    column.append('OTA diameter (m)')
-    uncer_column.append('Uncer OTA diameter (m)')
-    
-    for crit in criteria:
-        column.append(crit)
-        uncer_column.append(f"Uncer {crit}")
-        
-            
-    df_decision_matrix = df[column]
-    df_uncer_decision_matrix = df[uncer_column]
-    df_decision_matrix = df_decision_matrix.set_index('OTA diameter (m)')
-    df_uncer_decision_matrix = df_uncer_decision_matrix.set_index('Uncer OTA diameter (m)')
-    
-    # --- Weight Determination ---
-    len_alternative, len_criteria = np.shape(df_decision_matrix)
-    # --- Statitical Variance & CRITIC methods---
-    V = []
-    C_l = []
-    C_m = []
-    C_u = []
-    
-    # First, we need to normalize decision matrix
-    for crit in criteria:
-        x = df_decision_matrix[crit].to_numpy(dtype=float)
-        u = df_uncer_decision_matrix[f"Uncer {crit}"].to_numpy(dtype=float)
+    df = pd.read_csv(results_csv_path, sep="\t")
 
-        x_l = x - u
-        x_m = x
-        x_u = x + u
-        x_star_u = x_u.max()
-        x_less_l = x_l.min()
+    # Split criteria into benefit (more-is-better) and cost (less-is-better)
+    more = [c for c, v in criteria.items() if v["type"] == "benefit"]
+    less = [c for c, v in criteria.items() if v["type"] != "benefit"]
+
+    # ------------------------------------------------------------------
+    # Build decision matrix
+    # ------------------------------------------------------------------
+    columns       = ["OTA diameter (m)"]       + list(criteria)
+    uncer_columns = ["Uncer OTA diameter (m)"] + [f"Uncer {c}" for c in criteria]
+
+    dm  = df[columns].set_index("OTA diameter (m)")
+    udm = df[uncer_columns].set_index("Uncer OTA diameter (m)")
+
+    n_alt, n_crit = dm.shape
+
+    # ------------------------------------------------------------------
+    # Normalise into fuzzy triplets (l, m, u) for every criterion
+    # ------------------------------------------------------------------
+    V   = []          # Statistical Variance accumulator
+    C_l, C_m, C_u = [], [], []   # CRITIC accumulator
+
+    for crit in criteria:
+        x = dm[crit].to_numpy(dtype=float)
+        u = udm[f"Uncer {crit}"].to_numpy(dtype=float)
+
+        x_l, x_m, x_u = x - u, x, x + u
+        x_max = x_u.max()
+        x_min = x_l.min()
+        denom = x_max - x_min
 
         if crit in more:
-            # For st method
-            l_st = x_l / x_star_u
-            m_st = x_m / x_star_u
-            uu_st = x_u / x_star_u
-            
-            # For CRITIC method
-            l_crt = (x_l - x_less_l) / (x_star_u - x_less_l)
-            m_crt = (x_m - x_less_l) / (x_star_u - x_less_l)
-            uu_crt = (x_u - x_less_l) / (x_star_u - x_less_l)
-            
-            # For MEREC method
-            l_mrc = x_less_l / x_u
-            m_mrc = x_less_l / x_m
-            uu_mrc = x_less_l / x_l
+            l_st,  m_st,  u_st  = x_l / x_max, x_m / x_max, x_u / x_max
+            l_crt, m_crt, u_crt = (x_l - x_min) / denom, (x_m - x_min) / denom, (x_u - x_min) / denom
+            l_mrc, m_mrc, u_mrc = x_min / x_u, x_min / x_m, x_min / x_l
         else:
-            # For st method
-            l_st = x_less_l / x_u
-            m_st = x_less_l / x_m
-            uu_st = x_less_l / x_l
-            
-            # For CRITIC method
-            l_crt = (x_star_u - x_u) / (x_star_u - x_less_l)
-            m_crt = (x_star_u - x_m) / (x_star_u - x_less_l)
-            uu_crt = (x_star_u - x_l) / (x_star_u - x_less_l)
-            
-            # For MEREC method
-            l_mrc = x_l / x_star_u
-            m_mrc = x_m / x_star_u
-            uu_mrc = x_u / x_star_u
-            
-        df_decision_matrix[crit + "_fuzzy"] = list(map(np.array, np.column_stack([x_l, x_m, x_u])))
-        
-        df_decision_matrix[crit + "_norm_st"] = list(map(np.array, np.column_stack([l_st, m_st, uu_st])))
-        
-        df_decision_matrix[crit + "_norm_CRITIC"] = list(map(np.array, np.column_stack([l_crt, m_crt, uu_crt])))
-        
-        df_decision_matrix[crit + "_norm_MEREC"] = list(map(np.array, np.column_stack([l_mrc, m_mrc, uu_mrc])))
-        
-    df_decision_matrix.to_csv("data/decision_matrix.csv", sep="\t", index=False)
-    
-        
-    for criterio in criteria:
-        #all_values = df_decision_matrix[criterio].values
-        st_fuzzy_values = df_decision_matrix[criterio + "_norm_st"].values
-        crt_fuzzy_values = df_decision_matrix[criterio + "_norm_CRITIC"]
-        
-        cuadratic = []
-        
-        # This is to calculating V in the st method
-        for i in st_fuzzy_values:
-            cuadratic.append((i - np.mean(st_fuzzy_values)) ** 2)
-        V.append((1 / len_alternative) * sum(cuadratic))
-        
-        # This is for calculating the correlation in CRITIC method
-        correlation_l = []
-        correlation_m = []
-        correlation_u = []
-        for j, second_criterio in enumerate(criteria):
-            second_all_values = df_decision_matrix[second_criterio + "_norm_CRITIC"]
-            
-            if criterio == second_criterio:
-                pass
-            else:
-                crt_values = np.vstack(crt_fuzzy_values.to_numpy())
-                l_1 = crt_values[:, 0].astype(float)
-                m_1 = crt_values[:, 1].astype(float)
-                u_1 = crt_values[:, 2].astype(float)
-                
-                crt_values_2 = np.vstack(second_all_values.to_numpy())
-                l_2 = crt_values_2[:, 0].astype(float)
-                m_2 = crt_values_2[:, 1].astype(float)
-                u_2 = crt_values_2[:, 2].astype(float)
-                
-                corr_l, p_value = pearsonr(l_1, l_2)
-                correlation_l.append(corr_l)
-                
-                corr_m, p_value = pearsonr(m_1, m_2)
-                correlation_m.append(corr_m)
-                
-                corr_u, p_value = pearsonr(u_1, u_2)
-                correlation_u.append(corr_u)
-                
-        correlation_l = np.array(correlation_l)
-        correlation_m = np.array(correlation_m)
-        correlation_u = np.array(correlation_u)
+            l_st,  m_st,  u_st  = x_min / x_u, x_min / x_m, x_min / x_l
+            l_crt, m_crt, u_crt = (x_max - x_u) / denom, (x_max - x_m) / denom, (x_max - x_l) / denom
+            l_mrc, m_mrc, u_mrc = x_l / x_max, x_m / x_max, x_u / x_max
 
-        C_l.append(np.std(l_1) * np.nansum(1 - correlation_l))
-        C_m.append(np.std(m_1) * np.nansum(1 - correlation_m))
-        C_u.append(np.std(u_1) * np.nansum(1 - correlation_u))
-        
-    V = np.array(V)
-    
-    st_variance_weight = []
-    st_variance_weight.append(V[:,0] / np.nansum(V[:,2]))
-    st_variance_weight.append(V[:,1] / np.nansum(V[:,1]))
-    st_variance_weight.append(V[:,2] / np.nansum(V[:,0]))
-    st_variance_weight = np.array(st_variance_weight).T
-    st_variance_weight = np.sort(st_variance_weight)
-    st_variance_weight_defu = (st_variance_weight[:,0] + 4 * st_variance_weight[:,1] + st_variance_weight[:,2]) / 6
+        dm[crit + "_fuzzy"]      = _fuzzy_column(np.column_stack([x_l,  x_m,  x_u]))
+        dm[crit + "_norm_st"]    = _fuzzy_column(np.column_stack([l_st, m_st, u_st]))
+        dm[crit + "_norm_CRITIC"]= _fuzzy_column(np.column_stack([l_crt, m_crt, u_crt]))
+        dm[crit + "_norm_MEREC"] = _fuzzy_column(np.column_stack([l_mrc, m_mrc, u_mrc]))
 
-    C = np.array([np.array(C_l), np.array(C_m), np.array(C_u)])
-    C = C.T
-    CRITIC_weight = []
-    CRITIC_weight.append(C[:,0] / np.nansum(C[:,2]))
-    CRITIC_weight.append(C[:,1] / np.nansum(C[:,1]))
-    CRITIC_weight.append(C[:,2] / np.nansum(C[:,0]))
-    CRITIC_weight = np.array(CRITIC_weight).T
-    CRITIC_weight = np.sort(CRITIC_weight)
-    CRITIC_weight_defu = (CRITIC_weight[:,0] + 4 * CRITIC_weight[:,1] + CRITIC_weight[:,2]) / 6
-    
-    # --- MEREC method ---
-    E = []
-    S_component_l = []
-    S_component_m = []
-    S_component_u = []
-    S_alternative_l = []
-    S_alternative_m = []
-    S_alternative_u = []
-    mcr_values = []
-    
+    dm.to_csv(DECISION_CSV, sep="\t", index=False)
+    _log_saved(DECISION_CSV.name)
+
+    # ------------------------------------------------------------------
+    # Statistical Variance weights
+    # ------------------------------------------------------------------
     for crit in criteria:
-        mrc_fuzzy_values = df_decision_matrix[crit + "_norm_MEREC"]
-        mcr_values.append(mrc_fuzzy_values)
-    
-    mcr_values = np.array(mcr_values)
+        st_vals = dm[crit + "_norm_st"].values
+        V.append((1 / n_alt) * sum((v - np.mean(st_vals)) ** 2 for v in st_vals))
 
-    for i in range(0, len_alternative):
-        alternative_values= mcr_values[:, i]
-    
-        all_values = np.vstack(alternative_values)
-        l = all_values[:, 0].astype(float)
-        m = all_values[:, 1].astype(float)
-        u = all_values[:, 2].astype(float)
-    
-        S_component_l.append(math.log(1 + (1 / len_criteria) * sum(abs(math.log(x)) for x in l)))
-        S_component_m.append(math.log(1 + (1 / len_criteria) * sum(abs(math.log(x)) for x in m)))
-        S_component_u.append(math.log(1 + (1 / len_criteria) * sum(abs(math.log(x)) for x in u)))
-        
-        S_al_l = []
-        S_al_m = []
-        S_al_u = []
-        for j, criterio in enumerate(criteria):
-            new_values_l = [x for i, x in enumerate(l) if i != j]
-            S_al_l.append(math.log(1 + (1 / len_criteria) * sum(abs(math.log(x)) for x in new_values_l)))
-            new_values_m = [x for i, x in enumerate(m) if i != j]
-            S_al_m.append(math.log(1 + (1 / len_criteria) * sum(abs(math.log(x)) for x in new_values_m)))
-            new_values_u = [x for i, x in enumerate(u) if i != j]
-            S_al_u.append(math.log(1 + (1 / len_criteria) * sum(abs(math.log(x)) for x in new_values_u)))
-            
-        S_al_l = np.array(S_al_l)
-        S_alternative_l.append(S_al_l)
-        S_al_m = np.array(S_al_m)
-        S_alternative_m.append(S_al_m)
-        S_al_u = np.array(S_al_u)
-        S_alternative_u.append(S_al_u)
-        
-    S_alternative_l = np.array(S_alternative_l)
-    S_alternative_l = S_alternative_l.T
-    S_alternative_m = np.array(S_alternative_m)
-    S_alternative_m = S_alternative_m.T
-    S_alternative_u = np.array(S_alternative_u)
-    S_alternative_u = S_alternative_u.T
-    
-    S_component_l = np.array(S_component_l)
-    S_component_m = np.array(S_component_m)
-    S_component_u = np.array(S_component_u)
-    
-    E_crit_l = []
-    E_crit_m = []
-    E_crit_u = []
-    for i in range(0, len_criteria):
-        
-        all_values_l = S_alternative_l[i]
-        all_values_m = S_alternative_m[i]
-        all_values_u = S_alternative_u[i]
-                        
-        E_crit_l.append(sum(abs(all_values_l - S_component_l)))
-        E_crit_m.append(sum(abs(all_values_m - S_component_m)))
-        E_crit_u.append(sum(abs(all_values_u - S_component_u)))
-        
+        crt_vals = np.vstack(dm[crit + "_norm_CRITIC"].to_numpy())
+        l_1, m_1, u_1 = crt_vals[:, 0].astype(float), crt_vals[:, 1].astype(float), crt_vals[:, 2].astype(float)
 
-    E_crit = [np.array(E_crit_l), np.array(E_crit_m), np.array(E_crit_u)]
-    E_crit = np.array(E_crit)
-    E_crit = E_crit.T
-    
-    MEREC_weight = []
-    MEREC_weight.append(E_crit[:,0] / np.nansum(E_crit[:,2]))
-    MEREC_weight.append(E_crit[:,1] / np.nansum(E_crit[:,1]))
-    MEREC_weight.append(E_crit[:,2] / np.nansum(E_crit[:,0]))
-    MEREC_weight = np.array(MEREC_weight).T
-    MEREC_weight = np.sort(MEREC_weight)
-    MEREC_weight_defu = (MEREC_weight[:,0] + 4 * MEREC_weight[:,1] + MEREC_weight[:,2]) / 6
+        corr_l, corr_m, corr_u = [], [], []
+        for other in criteria:
+            if other == crit:
+                continue
+            other_vals = np.vstack(dm[other + "_norm_CRITIC"].to_numpy())
+            l_2 = other_vals[:, 0].astype(float)
+            m_2 = other_vals[:, 1].astype(float)
+            u_2 = other_vals[:, 2].astype(float)
+            corr_l.append(pearsonr(l_1, l_2)[0])
+            corr_m.append(pearsonr(m_1, m_2)[0])
+            corr_u.append(pearsonr(u_1, u_2)[0])
 
-    #---- TOPSIS ---
-    
-    I_criteria_st = []
-    I_criteria_crt = []
-    I_criteria_mcr = []
-        
-    for j, crit in enumerate(criteria):
-        st_fuzzy_values = df_decision_matrix[crit + "_norm_st"].values
-        st_fuzzy_values = np.vstack(st_fuzzy_values)
-        st_fuzzy_values_defu = (st_fuzzy_values[:,0] + 4 * st_fuzzy_values[:,1] + st_fuzzy_values[:,2]) / 6
-        
-        new_st_fuzzy_values = np.vstack(st_fuzzy_values)
+        C_l.append(np.std(l_1) * np.nansum(1 - np.array(corr_l)))
+        C_m.append(np.std(m_1) * np.nansum(1 - np.array(corr_m)))
+        C_u.append(np.std(u_1) * np.nansum(1 - np.array(corr_u)))
 
-        I_alternative_st = []
-        I_alternative_crt = []
-        I_alternative_mcr = []
+    V = np.array(V)
+    st_weight      = _fuzzy_weight_from_columns(V[:, 0], V[:, 1], V[:, 2])
+    st_weight_defu = _defuzzify(st_weight)
 
-        for i in range(0, len_alternative):
-            I_alternative_st.append(st_fuzzy_values[i] * st_variance_weight[j,:])
-            I_alternative_crt.append(st_fuzzy_values[i] * CRITIC_weight[j,:])
-            I_alternative_mcr.append(st_fuzzy_values[i] * MEREC_weight[j,:])
+    # ------------------------------------------------------------------
+    # CRITIC weights
+    # ------------------------------------------------------------------
+    C = np.column_stack([C_l, C_m, C_u])
+    crt_weight      = _fuzzy_weight_from_columns(C[:, 0], C[:, 1], C[:, 2])
+    crt_weight_defu = _defuzzify(crt_weight)
 
-        I_criteria_st.append(np.array(I_alternative_st))
-        I_criteria_crt.append(np.array(I_alternative_crt))
-        I_criteria_mcr.append(np.array(I_alternative_mcr))
+    # ------------------------------------------------------------------
+    # MEREC weights
+    # ------------------------------------------------------------------
+    mrc_all = np.array([dm[c + "_norm_MEREC"] for c in criteria])   # (n_crit, n_alt)
 
+    S_component = []
+    S_alternative = []    # will be (n_crit, n_alt) after transpose
 
-    I_criteria_st = np.array(I_criteria_st)
-    I_criteria_crt = np.array(I_criteria_crt)
-    I_criteria_mcr = np.array(I_criteria_mcr)
-    
-    A_star_st = np.array(np.max(I_criteria_st[:, :, 2], axis = 1))
-    A_less_st = np.array(np.min(I_criteria_st[:, :, 0], axis = 1))
-    A_star_crt = np.array(np.max(I_criteria_crt[:, :, 2], axis = 1))
-    A_less_crt = np.array(np.min(I_criteria_crt[:, :, 0], axis = 1))
-    A_star_mrc = np.array(np.max(I_criteria_mcr[:, :, 2], axis = 1))
-    A_less_mrc = np.array(np.min(I_criteria_mcr[:, :, 0], axis = 1))
-    
-    # Calculate teh border approximation area (MABAC)
-    g_st = (np.prod(I_criteria_st, axis=1)) ** (1 / len_alternative)
-    g_crt = (np.prod(I_criteria_crt, axis=1)) ** (1 / len_alternative)
-    g_mrc = (np.prod(I_criteria_mcr, axis=1)) ** (1 / len_alternative)
-    
-    # Calculate the distances (MABAC)
-    q_st = I_criteria_st - g_st[:, np.newaxis, :]
-    q_crt = I_criteria_crt - g_crt[:, np.newaxis, :]
-    q_mrc = I_criteria_mcr - g_mrc[:, np.newaxis, :]
-    
-    # Calculate the total score (MABAC)
-    S_st = sum(q_st)
-    S_st = (S_st[:,0] + 4 * S_st[:,1] + S_st[:,2]) / 6
-    S_crt = sum(q_crt)
-    S_crt = (S_crt[:,0] + 4 * S_crt[:,1] + S_crt[:,2]) / 6
-    S_mrc = sum(q_mrc)
-    S_mrc = (S_mrc[:,0] + 4 * S_mrc[:,1] + S_mrc[:,2]) / 6
+    for i in range(n_alt):
+        alt_vals = np.vstack(mrc_all[:, i])
+        l, m, u = alt_vals[:, 0].astype(float), alt_vals[:, 1].astype(float), alt_vals[:, 2].astype(float)
 
-    df["score_total_st_MABAC"] = pd.Series(S_st, index=range(S_st.size))
-    
-    df["score_total_crt_MABAC"] = pd.Series(S_crt, index=range(S_crt.size))
-    
-    df["score_total_mrc_MABAC"] = pd.Series(S_mrc, index=range(S_mrc.size))
-            
-    # Calculate the ideal and anti-ideal distances (TOPSIS)
-    d_star_st = []
-    d_less_st = []
-    d_star_crt = []
-    d_less_crt = []
-    d_star_mrc = []
-    d_less_mrc = []
-    
-    for j, crit in enumerate(criteria):
-        i_st = I_criteria_st[j]
-        a_star_st = A_star_st[j]
-        a_less_st = A_less_st[j]
-        
-        i_crt = I_criteria_crt[j]
-        a_star_crt = A_star_crt[j]
-        a_less_crt = A_less_crt[j]
-        
-        i_mrc = I_criteria_mcr[j]
-        a_star_mrc = A_star_mrc[j]
-        a_less_mrc = A_less_mrc[j]
-        
-        d_star_st.append(np.sqrt(1/3 * ((a_star_st - i_st[:,0]) ** 2 + (a_star_st - i_st[:,1]) ** 2 + (a_star_st - i_st[:,2]) ** 2)))
-        d_star_crt.append(np.sqrt(1/3 * ((a_star_crt - i_crt[:,0]) ** 2 + (a_star_crt - i_crt[:,1]) ** 2 + (a_star_crt - i_crt[:,2]) ** 2)))
-        d_star_mrc.append(np.sqrt(1/3 * ((a_star_mrc - i_mrc[:,0]) ** 2 + (a_star_mrc - i_mrc[:,1]) ** 2 + (a_star_mrc - i_mrc[:,2]) ** 2)))
-        
-        d_less_st.append(np.sqrt(1/3 * ((a_less_st - i_st[:,0]) ** 2 + (a_less_st - i_st[:,1]) ** 2 + (a_less_st - i_st[:,2]) ** 2)))
-        d_less_crt.append(np.sqrt(1/3 * ((a_less_crt - i_crt[:,0]) ** 2 + (a_less_crt - i_crt[:,1]) ** 2 + (a_less_crt - i_crt[:,2]) ** 2)))
-        d_less_mrc.append(np.sqrt(1/3 * ((a_less_mrc - i_mrc[:,0]) ** 2 + (a_less_mrc - i_mrc[:,1]) ** 2 + (a_less_mrc - i_mrc[:,2]) ** 2)))
-        
-        
-    D_star_st = sum(d_star_st)
-    D_less_st = sum(d_less_st)
-    D_star_crt = sum(d_star_crt)
-    D_less_crt = sum(d_less_crt)
-    D_star_mrc = sum(d_star_mrc)
-    D_less_mrc = sum(d_less_mrc)
+        s_l = math.log(1 + (1 / n_crit) * sum(abs(math.log(v)) for v in l))
+        s_m = math.log(1 + (1 / n_crit) * sum(abs(math.log(v)) for v in m))
+        s_u = math.log(1 + (1 / n_crit) * sum(abs(math.log(v)) for v in u))
+        S_component.append(np.array([s_l, s_m, s_u]))
 
-    
-    CC_st = D_less_st / (D_less_st + D_star_st)
-    CC_crt = D_less_crt / (D_less_crt + D_star_crt)
-    CC_mrc = D_less_mrc / (D_less_mrc * D_star_mrc)
+        alt_row = []
+        for j in range(n_crit):
+            l_j = [v for k, v in enumerate(l) if k != j]
+            m_j = [v for k, v in enumerate(m) if k != j]
+            u_j = [v for k, v in enumerate(u) if k != j]
+            alt_row.append(np.array([
+                math.log(1 + (1 / n_crit) * sum(abs(math.log(v)) for v in l_j)),
+                math.log(1 + (1 / n_crit) * sum(abs(math.log(v)) for v in m_j)),
+                math.log(1 + (1 / n_crit) * sum(abs(math.log(v)) for v in u_j)),
+            ]))
+        S_alternative.append(np.array(alt_row))
 
-    df["score_total_st_TOPSIS"] = pd.Series(CC_st, index=range(CC_st.size))
-    
-    df["score_total_crt_TOPSIS"] = pd.Series(CC_crt, index=range(CC_crt.size))
-    
-    df["score_total_mrc_TOPSIS"] = pd.Series(CC_mrc, index=range(CC_mrc.size))
-        
-    df.to_csv("data/score_total.csv", sep = '\t', index = False)
+    S_component   = np.array(S_component)          # (n_alt, 3)
+    S_alternative = np.array(S_alternative)        # (n_alt, n_crit, 3)
+    S_alternative = S_alternative.transpose(1, 0, 2)  # (n_crit, n_alt, 3)
 
-    
-    df_sorted_st_TOPSIS = df.sort_values(by="score_total_st_TOPSIS", ascending=False)
-    df_sorted_crt_TOPSIS = df.sort_values(by="score_total_crt_TOPSIS", ascending=False)
-    df_sorted_mrc_TOPSIS = df.sort_values(by="score_total_mrc_TOPSIS", ascending=False)
+    E_crit = np.array([
+        np.sum(np.abs(S_alternative[j] - S_component), axis=0)
+        for j in range(n_crit)
+    ])                                              # (n_crit, 3)
 
-    df_sorted_st_MABAC = df.sort_values(by="score_total_st_MABAC", ascending=False)
-    df_sorted_crt_MABAC = df.sort_values(by="score_total_crt_MABAC", ascending=False)
-    df_sorted_mrc_MABAC = df.sort_values(by="score_total_mrc_MABAC", ascending=False)
-    
-    df_sorted_st_TOPSIS.to_csv("data/score_total_st_TOPSIS.csv", sep = '\t', index = False)
-    df_sorted_crt_TOPSIS.to_csv("data/score_total_crt_TOPSIS.csv", sep = '\t', index = False)
-    df_sorted_mrc_TOPSIS.to_csv("data/score_total_mrc_TOPSIS.csv", sep = '\t', index = False)
+    mrc_weight      = _fuzzy_weight_from_columns(E_crit[:, 0], E_crit[:, 1], E_crit[:, 2])
+    mrc_weight_defu = _defuzzify(mrc_weight)
 
-    df_sorted_st_MABAC.to_csv("data/score_total_st_MABAC.csv", sep = '\t', index = False)
-    df_sorted_crt_MABAC.to_csv("data/score_total_crt_MABAC.csv", sep = '\t', index = False)
-    df_sorted_mrc_MABAC.to_csv("data/score_total_mrc_MABAC.csv", sep = '\t', index = False)
+    # ------------------------------------------------------------------
+    # Weighted normalised matrix for TOPSIS and MABAC
+    # ------------------------------------------------------------------
+    weights = {
+        "st":  st_weight,
+        "crt": crt_weight,
+        "mrc": mrc_weight,
+    }
 
-    print("\033[1;4;32mFile 'score_total.csv' was saved successfully\033[0m")
-    
-    scores_st = df["score_total_st_TOPSIS"].values
+    I = {}   # weighted matrices, shape (n_crit, n_alt, 3)
+    for tag, w in weights.items():
+        I[tag] = np.array([
+            [dm[crit + "_norm_st"].values[i] * w[j]
+             for i in range(n_alt)]
+            for j, crit in enumerate(criteria)
+        ])
 
-    best_index_st = np.argmax(scores_st)
-    
-    scores_crt = df["score_total_crt_TOPSIS"].values
+    # ------------------------------------------------------------------
+    # MABAC scores
+    # ------------------------------------------------------------------
+    for tag in weights:
+        g_mat = np.prod(I[tag], axis=1) ** (1 / n_alt)          # (n_crit, 3)
+        q_mat = I[tag] - g_mat[:, np.newaxis, :]                 # (n_crit, n_alt, 3)
+        S     = q_mat.sum(axis=0)                                # (n_alt, 3)
+        df[f"score_total_{tag}_MABAC"] = pd.Series(
+            _defuzzify(S), index=range(n_alt)
+        )
 
-    best_index_crt = np.argmax(scores_crt)
-    
-    scores_mrc = df["score_total_mrc_TOPSIS"].values
+    # ------------------------------------------------------------------
+    # TOPSIS scores
+    # ------------------------------------------------------------------
+    for tag in weights:
+        A_star = I[tag][:, :, 2].max(axis=1)   # (n_crit,)
+        A_less = I[tag][:, :, 0].min(axis=1)   # (n_crit,)
 
-    best_index_mrc = np.argmax(scores_mrc)
-        
+        d_star = np.array([
+            _fuzzy_distance(A_star[j], I[tag][j]) for j in range(n_crit)
+        ]).sum(axis=0)   # (n_alt,)
+
+        d_less = np.array([
+            _fuzzy_distance(A_less[j], I[tag][j]) for j in range(n_crit)
+        ]).sum(axis=0)
+
+        CC = d_less / (d_less + d_star)
+        df[f"score_total_{tag}_TOPSIS"] = pd.Series(CC, index=range(CC.size))
+
+    # ------------------------------------------------------------------
+    # Save ranked results
+    # ------------------------------------------------------------------
+    df.to_csv(SCORE_CSV, sep="\t", index=False)
+
+    for tag in weights:
+        for method in ("TOPSIS", "MABAC"):
+            col      = f"score_total_{tag}_{method}"
+            out_path = Path(f"data/{col}.csv")
+            df.sort_values(by=col, ascending=False).to_csv(out_path, sep="\t", index=False)
+
+    _log_saved(SCORE_CSV.name)
+
+    # ------------------------------------------------------------------
+    # Find best alternative indices
+    # ------------------------------------------------------------------
+    best = {
+        tag: int(np.argmax(df[f"score_total_{tag}_TOPSIS"].values))
+        for tag in weights
+    }
+
     print("\n\033[1m\033[4mBest configuration found:\033[0m\n")
-    
-#########################################################################
-# PLOTS
-#########################################################################
-    ota_diam_mm = (df["OTA diameter (m)"].values) * 1000
-    cost = df["Total cost (MEUR)"].values
-    n_fiber_total = df['Number of OTA for high efficiency'].values
-    
-    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 5))
-        
-    for i in range(0, len(cost)):
-    
-        if i in (best_index_st, best_index_crt, best_index_mrc):
-            pass
-        else:
-            ax.plot(ota_diam_mm[i], cost[i], 'o', label = f'{int(n_fiber_total[i])} OTAs of {int(ota_diam_mm[i])} mm')
-            
-    ax.plot(ota_diam_mm[best_index_st], cost[best_index_st], '*', ms = 20, label = f'Best fit St. Variance: {int(n_fiber_total[best_index_st])} OTAs of {int(ota_diam_mm[best_index_st])} mm')
-    ax.plot(ota_diam_mm[best_index_crt], cost[best_index_crt], '*', ms = 20, label = f'Best fit CRITIC: {int(n_fiber_total[best_index_crt])} OTAs of {int(ota_diam_mm[best_index_crt])} mm')
-    ax.plot(ota_diam_mm[best_index_mrc], cost[best_index_mrc], '*', ms = 20, label = f'Best fit MEREC: {int(n_fiber_total[best_index_mrc])} OTAs of {int(ota_diam_mm[best_index_mrc])} mm')
-    
-    plt.title('Cost (MEUR) vs OTA\'s diameter')
-    plt.xlabel('OTA\'s diameter (mm)')
-    plt.ylabel('Cost (MEUR)')
-    plt.grid(which='minor', alpha=0)
-    plt.grid(which='major', alpha=0.5)
-    lgnd = plt.legend(loc="upper right")
-    
-    plt.savefig("Figures/Cost_vs_Aperture.png")
-    
-    print("\033[1;4;32mFigure 'Cost_vs_Aperture.png' was saved successfully\033[0m")
-
-    plt.close()
-
-    recalculated_module_diameter_m = df["Recalculated module diameter (m)"].values
-    
-    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 5))
-        
-    for i in range(0, len(cost)):
-    
-        if i in (best_index_st, best_index_crt, best_index_mrc):
-            pass
-        else:
-            ax.plot(ota_diam_mm[i], recalculated_module_diameter_m [i], 'o', label = f'{int(n_fiber_total[i])} OTAs of {int(ota_diam_mm[i])} mm')
-            
-    ax.plot(ota_diam_mm[best_index_st], recalculated_module_diameter_m [best_index_st], '*', ms = 20, label = f'Best fit St. Variance: {int(n_fiber_total[best_index_st])} OTAs of {int(ota_diam_mm[best_index_st])} mm')
-    ax.plot(ota_diam_mm[best_index_crt], recalculated_module_diameter_m [best_index_crt], '*', ms = 20, label = f'Best fit CRITIC: {int(n_fiber_total[best_index_crt])} OTAs of {int(ota_diam_mm[best_index_crt])} mm')
-    ax.plot(ota_diam_mm[best_index_mrc], recalculated_module_diameter_m [best_index_mrc], '*', ms = 20, label = f'Best fit MEREC: {int(n_fiber_total[best_index_mrc])} OTAs of {int(ota_diam_mm[best_index_mrc])} mm')
-    
-    plt.title('Module size (m) vs OTA\'s diameter')
-    plt.xlabel('OTA\'s diameter (mm)')
-    plt.ylabel('Module aperture (m)')
-    plt.grid(which='minor', alpha=0)
-    plt.grid(which='major', alpha=0.5)
-    lgnd = plt.legend(loc="upper right")
-    
-    plt.savefig("Figures/Module_size_vs_Aperture.png")
-    
-    print("\033[1;4;32mFigure 'Module_size_vs_Aperture.png' was saved successfully\033[0m")
-
-    plt.close()
-    
-    out_core_PL = df['Required output fiber core (microns)'].values
-    
-    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 5))
-        
-    for i in range(0, len(cost)):
-    
-        if i in (best_index_st, best_index_crt, best_index_mrc):
-            pass
-        else:
-            ax.plot(ota_diam_mm[i], out_core_PL[i], 'o', label = f'{int(n_fiber_total[i])} OTAs of {int(ota_diam_mm[i])} mm')
-            
-    ax.plot(ota_diam_mm[best_index_st], out_core_PL[best_index_st], '*', ms = 20, label = f'Best fit St. Variance: {int(n_fiber_total[best_index_st])} OTAs of {int(ota_diam_mm[best_index_st])} mm')
-    ax.plot(ota_diam_mm[best_index_crt], out_core_PL[best_index_crt], '*', ms = 20, label = f'Best fit CRITIC: {int(n_fiber_total[best_index_crt])} OTAs of {int(ota_diam_mm[best_index_crt])} mm')
-    ax.plot(ota_diam_mm[best_index_mrc], out_core_PL[best_index_mrc], '*', ms = 20, label = f'Best fit MEREC: {int(n_fiber_total[best_index_mrc])} OTAs of {int(ota_diam_mm[best_index_mrc])} mm')
-    
-    plt.title('PL core vs OTA\'s diameters')
-    plt.xlabel('OTA\'s diameter (mm)')
-    plt.ylabel(f'PL core diameter (microns)')
-    plt.grid(which='minor', alpha=0)
-    plt.grid(which='major', alpha=0.5)
-    lgnd = plt.legend(loc="upper right")
-    
-    plt.savefig("Figures/Core_PL_vs_Aperture.png")
-    
-    print("\033[1;4;32mFigure 'Core_PL_vs_Aperture.png' was saved successfully\033[0m")
-
-    plt.close()
-    
-    cost_module = df['Total cost for each module (MEUR)'].values
-    
-    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 5))
-        
-    for i in range(0, len(cost)):
-    
-        if i in (best_index_st, best_index_crt, best_index_mrc):
-            pass
-        else:
-            ax.plot(recalculated_module_diameter_m[i], cost_module[i], 'o', label = f'{int(n_fiber_total[i])} OTAs of {int(ota_diam_mm[i])} mm')
-            ax.plot(recalculated_module_diameter_m[i], 2.37 * (recalculated_module_diameter_m[i]) ** 1.96, 'o', mec = 'black', label = f'Traditional cost for {int(recalculated_module_diameter_m[i])} m module')
-            
-    ax.plot(recalculated_module_diameter_m[best_index_st], cost_module[best_index_st], '*', ms = 20, label = f'Best fit St. Variance: {int(n_fiber_total[best_index_st])} OTAs of {int(ota_diam_mm[best_index_st])} mm')
-    ax.plot(recalculated_module_diameter_m[best_index_crt], cost_module[best_index_crt], '*', ms = 20, label = f'Best fit CRTIC: {int(n_fiber_total[best_index_crt])} OTAs of {int(ota_diam_mm[best_index_crt])} mm')
-    ax.plot(recalculated_module_diameter_m[best_index_mrc], cost_module[best_index_mrc], '*', ms = 20, label = f'Best fit MEREC: {int(n_fiber_total[best_index_mrc])} OTAs of {int(ota_diam_mm[best_index_mrc])} mm')
-    
-    plt.title('Cost vs Module size')
-    plt.xlabel('Module diameter (m)')
-    plt.ylabel(f'Cost (MEUR)')
-    plt.grid(which='minor', alpha=0)
-    plt.grid(which='major', alpha=0.5)
-    
-    plt.savefig("Figures/Cost_vs_Module_size.png")
-    
-    print("\033[1;4;32mFigure 'Cost_vs_Module_size.png' was saved successfully\033[0m")
-
-    plt.close()
-    
-    for col in criteria.keys():
+    for col in criteria:
         val = df[col].values
-        if isinstance(val, (list, np.ndarray)):
-            print(f"{col}: {val[best_index_st]}")
-        else:
-            print(f"{col}: {val}")
+        print(f"{col}: {val[best['st']]}")
+    print(f"score_total_st_TOPSIS: {df['score_total_st_TOPSIS'].values[best['st']]:.4f}")
 
-    print(f"score_total_st: {scores_st[best_index_st]}")
-    
-    
-    fig, ax = plt.subplots(figsize=(8, 5), subplot_kw={'projection': 'polar'})
-    
-    series = [st_variance_weight_defu, CRITIC_weight_defu, MEREC_weight_defu]
+    # ------------------------------------------------------------------
+    # Plots
+    # ------------------------------------------------------------------
+    _plot_multi_criteria(df, criteria, best, st_weight_defu, crt_weight_defu, mrc_weight_defu)
+
+    return (
+        st_weight,  st_weight_defu,
+        crt_weight, crt_weight_defu,
+        mrc_weight, mrc_weight_defu,
+        criteria,
+    )
+
+
+def _plot_scatter(ax, ota_mm, y_vals, n_ota, best_indices, ylabel: str):
+    """Plot all alternatives as circles and best-fit ones as stars."""
+    best_set = set(best_indices.values())
+    for i in range(len(ota_mm)):
+        if i not in best_set:
+            ax.plot(ota_mm[i], y_vals[i], "o",
+                    label=f"{int(n_ota[i])} OTAs of {int(ota_mm[i])} mm")
+
+    labels = {"st": "St. Variance", "crt": "CRITIC", "mrc": "MEREC"}
+    for tag, idx in best_indices.items():
+        ax.plot(ota_mm[idx], y_vals[idx], "*", ms=20,
+                label=f"Best {labels[tag]}: {int(n_ota[idx])} OTAs of {int(ota_mm[idx])} mm")
+
+    ax.set_ylabel(ylabel)
+    ax.grid(which="major", alpha=0.5)
+    ax.grid(which="minor", alpha=0)
+    ax.legend(loc="upper right")
+
+
+def _plot_multi_criteria(df, criteria, best, st_defu, crt_defu, mrc_defu):
+    """Generate and save all diagnostic figures for the multi-criteria analysis."""
+    ota_mm  = df["OTA diameter (m)"].values * 1000
+    cost    = df["Total cost (MEUR)"].values
+    n_ota   = df["Number of OTA for high efficiency"].values
+    rec_mod = df["Recalculated module diameter (m)"].values
+    out_core= df["Required output fiber core (microns)"].values
+    cost_mod= df["Total cost for each module (MEUR)"].values
+
+    plots = [
+        ("Cost (MEUR) vs OTA diameter",         ota_mm,  cost,     "Cost (MEUR)",          "OTA diameter (mm)",    "Cost_vs_Aperture.png"),
+        ("Module size (m) vs OTA diameter",      ota_mm,  rec_mod,  "Module aperture (m)",  "OTA diameter (mm)",    "Module_size_vs_Aperture.png"),
+        ("PL core vs OTA diameter",              ota_mm,  out_core, "PL core (µm)",         "OTA diameter (mm)",    "Core_PL_vs_Aperture.png"),
+    ]
+
+    for title, x_data, y_data, ylabel, xlabel, fname in plots:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        _plot_scatter(ax, x_data, y_data, n_ota, best, ylabel)
+        ax.set_xlabel(xlabel)
+        ax.set_title(title)
+        plt.tight_layout()
+        plt.savefig(FIGURES_DIR / fname)
+        _log_saved(fname)
+        plt.close()
+
+    # Cost vs Module size (extra reference curve)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    best_set = set(best.values())
+    for i in range(len(ota_mm)):
+        if i not in best_set:
+            ax.plot(rec_mod[i], cost_mod[i], "o",
+                    label=f"{int(n_ota[i])} OTAs of {int(ota_mm[i])} mm")
+            ax.plot(rec_mod[i], 2.37 * rec_mod[i] ** 1.96, "o", mec="black",
+                    label=f"Traditional cost for {rec_mod[i]:.1f} m module")
+    labels = {"st": "St. Variance", "crt": "CRITIC", "mrc": "MEREC"}
+    for tag, idx in best.items():
+        ax.plot(rec_mod[idx], cost_mod[idx], "*", ms=20,
+                label=f"Best {labels[tag]}: {int(n_ota[idx])} OTAs of {int(ota_mm[idx])} mm")
+    ax.set_xlabel("Module diameter (m)")
+    ax.set_ylabel("Cost (MEUR)")
+    ax.set_title("Cost vs Module size")
+    ax.grid(which="major", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / "Cost_vs_Module_size.png")
+    _log_saved("Cost_vs_Module_size.png")
+    plt.close()
+
+    # Spider diagram
+    fig, ax = plt.subplots(figsize=(8, 5), subplot_kw={"projection": "polar"})
+    series        = [st_defu, crt_defu, mrc_defu]
     series_labels = ["F-St.Variance", "F-CRITIC", "F-MEREC"]
-    colors = ["tab:red", "tab:green", "tab:blue"]
-    
-    N = len(criteria)
+    colors        = ["tab:red", "tab:green", "tab:blue"]
+    N      = len(criteria)
     angles = np.linspace(0, 2 * np.pi, N, endpoint=False)
     angles = np.concatenate((angles, [angles[0]]))
 
@@ -582,419 +454,383 @@ def multi_criteria(results_csv_path, criteria):
     ax.set_yticks([0.1, 0.2, 0.3, 0.4])
     ax.set_yticklabels(["0.1", "0.2", "0.3", "0.4"], fontsize=10)
     ax.grid(True, color="#bcbcbc", alpha=0.6)
-
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(criteria, fontsize=11)
+    ax.set_xticklabels(list(criteria), fontsize=11)
 
     for y, label, color in zip(series, series_labels, colors):
         y_closed = np.concatenate((y, [y[0]]))
         ax.plot(angles, y_closed, color=color, linewidth=2, label=label)
         ax.fill(angles, y_closed, color=color, alpha=0.15)
-
-    #ax.legend(loc="upper right", bbox_to_anchor=(1.4, 1.15))
     ax.legend(loc=(1, 0.6))
     plt.tight_layout()
-    
-    plt.savefig("Figures/Spider_Diagram_Weights.png")
-    plt.savefig("Figures/Spider_Diagram_Weights.pdf")
-    
-    print("\033[1;4;32mFigure 'Spider_Diagram_Weights.png' was saved successfully\033[0m")
-
+    plt.savefig(FIGURES_DIR / "Spider_Diagram_Weights.png")
+    plt.savefig(FIGURES_DIR / "Spider_Diagram_Weights.pdf")
+    _log_saved("Spider_Diagram_Weights.png")
     plt.close()
-    
-    df = pd.DataFrame({
-    
-        "F-St. Variance": st_variance_weight_defu,
-        "F-CRITIC":       CRITIC_weight_defu,
-        "F-MEREC":        MEREC_weight_defu
+
+    # Correlation heat-map
+    weight_df = pd.DataFrame({
+        "F-St. Variance": st_defu,
+        "F-CRITIC":       crt_defu,
+        "F-MEREC":        mrc_defu,
     })
-
-    corr = df.corr(method="pearson")
-
-    plt.figure(figsize=(6.5, 5.8))
-    ax = sns.heatmap(
-        corr,
-        vmin=0.5, vmax=1.0,  # rango parecido al de tu figura (ajusta si quieres)
-        cmap="Greens",       # paleta en verdes
+    fig, ax_hm = plt.subplots(figsize=(6.5, 5.8))
+    sns.heatmap(
+        weight_df.corr(method="pearson"),
+        vmin=0.5, vmax=1.0,
+        cmap="Greens",
         annot=True, fmt=".3f",
         square=True,
-        cbar_kws={"label": "Pearson Correlation Coefficient"}
+        cbar_kws={"label": "Pearson Correlation Coefficient"},
+        ax=ax_hm,
     )
-
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="left")
-    ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+    ax_hm.set_xticklabels(ax_hm.get_xticklabels(), rotation=45, ha="left")
+    ax_hm.set_yticklabels(ax_hm.get_yticklabels(), rotation=0)
     plt.tight_layout()
-    
-    plt.savefig("Figures/Correlation_Matrix_Weights.png")
-    plt.savefig("Figures/Correlation_Matrix_Weights.pdf")
-    
-    print("\033[1;4;32mFigure 'Correlation_Matrix_Weights.png' was saved successfully\033[0m")
-
+    plt.savefig(FIGURES_DIR / "Correlation_Matrix_Weights.png")
+    plt.savefig(FIGURES_DIR / "Correlation_Matrix_Weights.pdf")
+    _log_saved("Correlation_Matrix_Weights.png")
     plt.close()
-    
-    return st_variance_weight, st_variance_weight_defu, CRITIC_weight, CRITIC_weight_defu, MEREC_weight, MEREC_weight_defu, criteria
-    
-def snr_cal(archive, plate_scale, R_noise, g, pix_size, FoV, DARK, QE, slicer, super_pl):
-    # Detector paremeters (CARMENES-VIS)
-    df = pd.read_csv('data/results_marcot.csv', sep = '\t')
-    
-    #try:
-    #    def parse_array(x):
-    #        if not isinstance(x, str) or not re.search(r'\d', x):
-    #            return x
-    #        x = x.strip("[] \n\t")
-    #        return np.fromstring(x, sep=' ')
-    #        df['Selected commercial output core (microns)'] = df['Selected commercial output core (microns)'].apply(parse_array)
-    #except Exception as e:
-    #    print(f'\033[4;93;1mWARNING: Error in column {col}: {str(e)}\033[0m')
-    #   return None
-    
-    module_diameter_m = df['Module diameter (m)'].values
-    efi_sys_MARCOT = df['Expected efficiency'].values
-    
-
-    fiber_core_mm_MARCOT = (df['Selected commercial output core (microns)'].values) * 1e-3
-    
-    fiber_core_in_mm = (df['Selected commercial input core (microns)'].values) * 1e-3
-
-    #fiber_core_mm_MARCOT_2 =(df['Selected commercial output core 2-stage (microns)'].values) * 1e-3
-    
-    e_fiber_core_mm_MARCOT = (df['Uncer Selected commercial output core (microns)'].values) * 1e-3
-    e_fiber_core_in_mm = (df['Uncer Selected commercial input core (microns)'].values) * 1e-3
-    
-    n_modules = df['Total modules'].values
-    n_OTAs = df['Number of OTAs'].values
-    
-    t_exp = 100 # Exposure time [s]
-    pix_size = pix_size * 1e-3
-    DARK = DARK * 1e-3
-    plate_scale = plate_scale * 1e-3
-
-    def N_det(DARK, t_exp, g, R_noise, fiber_core_mm, n_modules):
-        n_pix = n_modules * fiber_core_mm / pix_size
-        return n_pix * ((DARK / g) * t_exp + (R_noise / g)**2)
-
-    # Parameters for a random object J02530+168
-
-    l_ini = 1.1e-6 # Beginning of the J band [m]
-    l_fin = 1.4e-6 # End of the J band [m]
-    hc = 1.98644586e-25 # Speed light and Planck cte [J/m]
-    F_obs_J = 1.277494916846618e-12 # Observational magnitude [W/m2/um]
 
 
-    # Define the function inside the integral
-    def function(x):
-        return x
+# ---------------------------------------------------------------------------
+# snr_cal
+# ---------------------------------------------------------------------------
 
-    def signal(module_diameter_m, efi_sys, hc, QE, l_ini, l_fin, F_obs_J):
-        result, error = quad(function, l_ini, l_fin)
-        n_adu = (np.pi * ((module_diameter_m / 2) ** 2) * efi_sys) / hc * F_obs_J * QE * result
-        return n_adu
-
-    N_ADU_PSEU = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
-    
-    e_N_ADU_PSEU = N_ADU_PSEU * np.sqrt((0.1 / t_exp) ** 2 + (0.001 / efi_sys_MARCOT) ** 2 + (2 * 0.1 / module_diameter_m) ** 2 + (0.01 * 1e-12/ F_obs_J) ** 2 + ((2 * l_fin * 0.01 * 1e-6) ** 2 + (2 * l_ini * 0.01 * 1e-6) ** 2) ** 2 / ((l_fin ** 2 - l_ini ** 2) ** 2))
-    
-    
-    N_ADU_MARCOT = signal(module_diameter_m, efi_sys_MARCOT, hc, QE, l_ini, l_fin, F_obs_J) * t_exp
-    
-    e_N_ADU_MARCOT = N_ADU_MARCOT * np.sqrt((0.1 / t_exp) ** 2 + (0.001 / efi_sys_MARCOT) ** 2 + (2 * 0.1 / module_diameter_m) ** 2 + (0.01 * 1e-12/ F_obs_J) ** 2 + ((2 * l_fin * 0.01 * 1e-6) ** 2 + (2 * l_ini * 0.01 * 1e-6) ** 2) ** 2 / ((l_fin ** 2 - l_ini ** 2) ** 2))
-    
-    if slicer == True:
-        SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT * 0.5, 1) + N_ADU_MARCOT / g)
-        SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_in_mm * 0.5, n_modules * n_OTAs) + N_ADU_PSEU / g)
-    else:
-        SNR_MARCOT = (N_ADU_MARCOT / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_mm_MARCOT, 1) + N_ADU_MARCOT / g)
-        SNR_PSEU = (N_ADU_PSEU / g) / np.sqrt(N_det(DARK, t_exp, g, R_noise, fiber_core_in_mm, n_modules * n_OTAs) + N_ADU_PSEU / g)
-
-    
-    
-    values_MARCOT = {'ADU': N_ADU_MARCOT, 'g': g, 'd': fiber_core_mm_MARCOT, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
-    sigmas_MARCOT = {'ADU': e_N_ADU_MARCOT, 'g': 0.1, 'd': e_fiber_core_mm_MARCOT, 'p': 0.1e-3, 'D': 0.1, 't': 0.1, 'R': 0.1}
-    
-    
-    values_PSEU = {'ADU': N_ADU_PSEU, 'g': g, 'd': fiber_core_in_mm, 'p': pix_size, 'D': DARK, 't': t_exp, 'R': R_noise}
-    sigmas_PSEU = {'ADU': e_N_ADU_PSEU, 'g': 0.1, 'd': e_fiber_core_in_mm, 'p': 0.1e-3, 'D': 0.1, 't': 0.1, 'R': 0.1}
-        
-
-    def sigma_snr(values, sigmas):
-
-    # Variables
-        A = values['ADU']
-        g = float(values['g'])
-        d = values['d']
-        p = float(values['p'])
-        D = float(values['D'])
-        t = float(values['t'])
-        R = float(values['R'])
-
-    # Intermedios
-        N = A / g
-        Y = (D * t) / g + (R**2) / (g**2)
-        X = (d / p) * Y
-        Q = X + N
-
-    # Derivadas base
-        df_dN = (X + 0.5 * N) / (Q**1.5)
-        df_dX = -0.5 * N / (Q**1.5)
-
-    # Derivadas parciales respecto a variables originales
-        partials = {}
-
-    # ADU
-        partials['ADU'] = df_dN * (1.0 / g)
-
-    # d, p
-        partials['d'] = df_dX * (X / d)
-        partials['p'] = df_dX * (-X / p)
-
-    # D, t
-        partials['D'] = df_dX * ((d / p) * (t / g))
-        partials['t'] = df_dX * ((d / p) * (D / g))
-
-    # R
-        partials['R'] = df_dX * ((d / p) * (2.0 * R / (g**2)))
-
-    # g (afecta a N y a X)
-        dN_dg = -N / g
-        dX_dg = (d / p) * (-(D * t) / (g**2) - 2.0 * (R**2) / (g**3))
-        partials['g'] = df_dN * dN_dg + df_dX * dX_dg
-    
-    # Propagación (independencia)
-        var_f = 0.0
-        for k in ['ADU','g','d','p','D','t','R']:
-            var_f += (partials[k] * sigmas[k])**2
-
-        return np.sqrt(var_f)
-    
-    #target_len = len(df['OTA diameter (m)'])
-    
-    df['SNR fraction'] = None
-    df['Uncer SNR fraction'] = None
-    
-    
-    value_to_save = (SNR_MARCOT / SNR_PSEU)
-    uncer_to_save = value_to_save * np.sqrt((sigma_snr(values_MARCOT, sigmas_MARCOT) / SNR_MARCOT) ** 2 + (sigma_snr(values_PSEU, sigmas_PSEU) / SNR_PSEU) ** 2)
-    #value_to_save = np.asarray(value_to_save).ravel()
-    
-    df['SNR fraction'] = pd.Series(value_to_save, index=range(value_to_save.size))
-    
-    df['Uncer SNR fraction'] = pd.Series(uncer_to_save, index=range(uncer_to_save.size))
-    
-    df.to_csv('data/results_marcot.csv', sep='\t', index=False)
-        
-    return value_to_save
+def _flux_integral(l_ini: float, l_fin: float) -> float:
+    """Compute ∫ λ dλ over the J band (simple analytic result)."""
+    result, _ = quad(lambda x: x, l_ini, l_fin)
+    return result
 
 
-def tables(criteria):
+def _signal(module_diam_m, efficiency, QE, flux_integral) -> np.ndarray:
+    """
+    Compute the number of ADU electrons collected by the telescope.
 
-    st_weight, st_weight_defu, crt_weight, crt_weight_defu, mrc_weight, mrc_weight_defu, criteria = multi_criteria('data/results_marcot.csv', criteria)
+    Parameters
+    ----------
+    module_diam_m : array-like
+        Effective module diameter [m].
+    efficiency : array-like
+        End-to-end system throughput.
+    QE : float
+        Detector quantum efficiency.
+    flux_integral : float
+        Pre-computed ∫ λ F_obs dλ value [W/m²].
+    """
+    area = np.pi * (np.asarray(module_diam_m) / 2) ** 2
+    return area * efficiency * _F_OBS_J * QE * flux_integral / _HC
 
 
-    csv_path = Path("data/decision_matrix.csv")  # ajusta si tu ruta es distinta
-    txt_out = Path("data/table_dm.txt")
+def _n_detector(DARK, t_exp, g, R_noise, fiber_core_mm, pix_size_mm, n_modules) -> np.ndarray:
+    """Compute detector noise electrons (dark + read)."""
+    n_pix = n_modules * fiber_core_mm / pix_size_mm
+    return n_pix * ((DARK / g) * t_exp + (R_noise / g) ** 2)
 
-    df = pd.read_csv(csv_path, sep='\t', header=0, index_col=0)
-    
-    cols = []
-    for crit in criteria:
-        cols.append(df[crit + "_fuzzy"].values)
-        
-    column = ["C1", "C2", "C3", "C4", "C5", "C6", "C7"]
-    if len(criteria) > 7:
-        for i in range(0, len(criteria) - 7):
-            column.append(f'C{7 + i}')
 
-    def fmt(x):
-        try:
-            return f"{float(x):.3g}"  # 3 cifras significativas
-        except Exception:
-            return str(x)
+def _snr(N_adu, g, N_det) -> np.ndarray:
+    """Compute SNR from signal and detector noise."""
+    S = N_adu / g
+    return S / np.sqrt(N_det + S)
 
-    index_name = df.index.name or ""
-    #cols = df.columns.tolist()
 
-    header_cells = [rf"\textbf{{{c}}}" for c in column]
-    header_line = " & ".join(header_cells) + r" \\"
+def _sigma_snr(values: dict, sigmas: dict) -> np.ndarray:
+    """
+    Propagate uncertainties through the SNR formula using partial derivatives.
 
-    body_lines = []
-    for i, crit in enumerate(criteria):
-        vals = []
-        for idx, vector in enumerate(cols):
-            vals.append(vector[i])
-        body_lines.append(f" & ".join(vals) + r" \\")
+    Parameters
+    ----------
+    values / sigmas : dict
+        Keys: 'ADU', 'g', 'd' (fiber core mm), 'p' (pixel mm),
+              'D' (dark), 't' (exposure), 'R' (read noise).
+    """
+    A, g  = values["ADU"], float(values["g"])
+    d, p  = values["d"], float(values["p"])
+    D, t  = float(values["D"]), float(values["t"])
+    R     = float(values["R"])
 
-    table = (
-        r"\begin{table*}" + "\n"
-        f"  \\begin{{tabular}}{{l{'r' * len(cols)}}}\n"
-        r"      \toprule" + "\n"
-        "       " + header_line + "\n"
-        r"      \midrule" + "\n"
-        "       " + "\n".join(body_lines) + "\n"
-        r"      \bottomrule" + "\n"
-        r"  \end{tabular}" + "\n"
-        r"  \caption{Decision matrix of configurations}" + "\n"
-        r"  \label{tab:decision_matrix_inline}" + "\n"
-        r"\end{table*}" + "\n"
+    N = A / g
+    Y = (D * t) / g + (R ** 2) / (g ** 2)
+    X = (d / p) * Y
+    Q = X + N
+
+    df_dN = (X + 0.5 * N) / (Q ** 1.5)
+    df_dX = -0.5 * N / (Q ** 1.5)
+
+    dN_dg  = -N / g
+    dX_dg  = (d / p) * (-(D * t) / (g ** 2) - 2.0 * (R ** 2) / (g ** 3))
+
+    partials = {
+        "ADU": df_dN / g,
+        "d":   df_dX * (X / d),
+        "p":   df_dX * (-X / p),
+        "D":   df_dX * ((d / p) * (t / g)),
+        "t":   df_dX * ((d / p) * (D / g)),
+        "R":   df_dX * ((d / p) * (2.0 * R / (g ** 2))),
+        "g":   df_dN * dN_dg + df_dX * dX_dg,
+    }
+
+    var = sum((partials[k] * sigmas[k]) ** 2 for k in partials)
+    return np.sqrt(var)
+
+
+def snr_cal(
+    archive,
+    plate_scale: float,
+    R_noise: float,
+    g: float,
+    pix_size: float,
+    FoV: float,
+    DARK: float,
+    QE: float,
+    slicer: bool,
+    super_pl: bool,
+) -> np.ndarray:
+    """
+    Compute the SNR fraction SNR_MARCOT / SNR_pseudoslit and save it to
+    the results CSV.
+
+    Parameters
+    ----------
+    archive : str or Path
+        Path to the results TSV (currently unused; reads RESULTS_CSV directly).
+    plate_scale : float
+        Detector plate scale [µm/arcsec].
+    R_noise : float
+        Read noise [e⁻].
+    g : float
+        Gain [e⁻/ADU].
+    pix_size : float
+        Pixel size [µm/px].
+    FoV : float
+        Sky aperture [arcsec].
+    DARK : float
+        Dark current [e⁻/s × 10³].
+    QE : float
+        Quantum efficiency.
+    slicer : bool
+        Whether an image slicer is used (halves the effective fiber core).
+    super_pl : bool
+        Whether a super photonic lantern is used (currently unused).
+
+    Returns
+    -------
+    np.ndarray
+        SNR fraction array (one value per alternative).
+    """
+    df = pd.read_csv(RESULTS_CSV, sep="\t")
+
+    # Convert units
+    pix_size_mm  = pix_size  * 1e-3   # µm → mm
+    DARK_e       = DARK      * 1e-3   # ×10³ e/s → e/s
+
+    module_diam   = df["Module diameter (m)"].values
+    efficiency    = df["Expected efficiency"].values
+    fiber_out_mm  = df["Selected commercial output core (microns)"].values * 1e-3
+    fiber_in_mm   = df["Selected commercial input core (microns)"].values  * 1e-3
+    e_fiber_out   = df["Uncer Selected commercial output core (microns)"].values * 1e-3
+    e_fiber_in    = df["Uncer Selected commercial input core (microns)"].values  * 1e-3
+    n_modules     = df["Total modules"].values
+    n_otas        = df["Number of OTAs"].values
+
+    flux_int = _flux_integral(_L_INI, _L_FIN)
+
+    N_adu = _signal(module_diam, efficiency, QE, flux_int) * _T_EXP
+    e_N_adu = N_adu * np.sqrt(
+        (0.1 / _T_EXP) ** 2
+        + (0.001 / efficiency) ** 2
+        + (2 * 0.1 / module_diam) ** 2
+        + (0.01e-12 / _F_OBS_J) ** 2
+        + ((2 * _L_FIN * 0.01e-6) ** 2 + (2 * _L_INI * 0.01e-6) ** 2) ** 2
+          / (_L_FIN ** 2 - _L_INI ** 2) ** 2
     )
 
-    txt_out.write_text(table, encoding="utf-8")
+    factor = 0.5 if slicer else 1.0
+    N_det_marcot = _n_detector(DARK_e, _T_EXP, g, R_noise, fiber_out_mm * factor, pix_size_mm, 1)
+    N_det_pseu   = _n_detector(DARK_e, _T_EXP, g, R_noise, fiber_in_mm  * factor, pix_size_mm, n_modules * n_otas)
 
-    print("\033[1;4;32mFile 'table_dm.txt' was saved successfully\033[0m")
-    
-    
-    
-    column = []
-    for crit in criteria:
-        column.append(crit)
-    column = ["C1", "C2", "C3", "C4", "C5", "C6", "C7"]
-    if len(criteria) > 7:
-        for i in range(0, len(criteria) - 7):
-            column.append(f'C{7 + 1 + i}')
-        
-    txt_out = Path("data/table_weight.txt")
+    SNR_MARCOT = _snr(N_adu, g, N_det_marcot)
+    SNR_PSEU   = _snr(N_adu, g, N_det_pseu)
 
-    index_name = ['St. Variance', 'CRITIC', 'MEREC']
-    weights = []
-    weights.append(np.round(st_weight, 3))
-    weights.append(np.round(crt_weight, 3))
-    weights.append(np.round(mrc_weight, 3))
-    weights = np.array(weights)
-    
-    header_cells = [rf"\textbf{{Criterion}}"] + [rf"\textbf{{{c}}}" for c in index_name]
-    header_line = " & ".join(header_cells) + r" \\"
-    
-    body_lines = []
-    for i, c in enumerate(column):
-        vals = []
-        for idx, vector in enumerate(weights):
-            vals.append(vector[i])
-        body_lines.append(f"{c} & " + " & ".join(str(cc) for cc in vals) + r" \\")
+    values_m = {"ADU": N_adu, "g": g, "d": fiber_out_mm, "p": pix_size_mm, "D": DARK_e, "t": _T_EXP, "R": R_noise}
+    sigmas_m = {"ADU": e_N_adu, "g": 0.1, "d": e_fiber_out, "p": 0.1e-3, "D": 0.1, "t": 0.1, "R": 0.1}
+    values_p = {"ADU": N_adu, "g": g, "d": fiber_in_mm,  "p": pix_size_mm, "D": DARK_e, "t": _T_EXP, "R": R_noise}
+    sigmas_p = {"ADU": e_N_adu, "g": 0.1, "d": e_fiber_in,  "p": 0.1e-3, "D": 0.1, "t": 0.1, "R": 0.1}
 
-    table = (
-        r"\begin{table*}" + "\n"
-        r"  \centering" + "\n"
-        f"  \\begin{{tabular}}{{l{'c' * (len(index_name) + 1)}}}\n"
-        r"      \toprule" + "\n"
-        r"      \toprule" + "\n"
-        "       " + header_line + "\n"
-        r"      \midrule" + "\n"
-        "       " + "\n".join(body_lines) + "\n"
-        r"      \bottomrule" + "\n"
-        r"  \end{tabular}" + "\n"
-        r"  \caption{Fuzzy weights determined by methodology.}" + "\n"
-        r"  \label{tab:all_weights}" + "\n"
-        r"\end{table*}" + "\n"
+    snr_fraction  = SNR_MARCOT / SNR_PSEU
+    e_snr_fraction = snr_fraction * np.sqrt(
+        (_sigma_snr(values_m, sigmas_m) / SNR_MARCOT) ** 2
+        + (_sigma_snr(values_p, sigmas_p) / SNR_PSEU) ** 2
     )
 
-    txt_out.write_text(table, encoding="utf-8")
+    df["SNR fraction"]       = pd.Series(snr_fraction,   index=range(snr_fraction.size))
+    df["Uncer SNR fraction"] = pd.Series(e_snr_fraction, index=range(e_snr_fraction.size))
+    df.to_csv(RESULTS_CSV, sep="\t", index=False)
 
-    print("\033[1;4;32mFile 'table_weight.txt' was saved successfully\033[0m")
-    
-    column = []
-    for crit in criteria:
-        column.append(crit)
-    column = ["C1", "C2", "C3", "C4", "C5", "C6", "C7"]
-    if len(criteria) > 7:
-        for i in range(0, len(criteria) - 7):
-            column.append(f'C{7 + 1 + i}')
-        
-    txt_out = Path("data/table_weight_defu.txt")
+    return snr_fraction
 
-    index_name = ['St. Variance ($\%$)', 'CRITIC ($\%$)', 'MEREC ($\%$)']
-    weights = []
-    weights.append(np.round(st_weight_defu * 100, 3))
-    weights.append(np.round(crt_weight_defu * 100, 3))
-    weights.append(np.round(mrc_weight_defu * 100, 3))
-    weights = np.array(weights)
-    
-    header_cells = [rf"\textbf{{Criterion}}"] + [rf"\textbf{{{c}}}" for c in index_name]
-    header_line = " & ".join(header_cells) + r" \\"
-    
-    body_lines = []
-    for i, c in enumerate(column):
-        vals = []
-        for idx, vector in enumerate(weights):
-            vals.append(vector[i])
-        body_lines.append(f"{c} & " + " & ".join(str(cc) for cc in vals) + r" \\")
 
-    table = (
-        r"\begin{table*}" + "\n"
-        r"  \centering" + "\n"
-        f"  \\begin{{tabular}}{{l{'c' * (len(index_name) + 1)}}}\n"
-        r"      \toprule" + "\n"
-        r"      \toprule" + "\n"
-        "       " + header_line + "\n"
-        r"      \midrule" + "\n"
-        "       " + "\n".join(body_lines) + "\n"
-        r"      \bottomrule" + "\n"
-        r"  \end{tabular}" + "\n"
-        r"  \caption{Defuzzy weights determined by methodology.}" + "\n"
-        r"  \label{tab:all_weights_defu}" + "\n"
-        r"\end{table*}" + "\n"
+# ---------------------------------------------------------------------------
+# tables
+# ---------------------------------------------------------------------------
+
+def _make_criteria_labels(n: int) -> list[str]:
+    return _criteria_column_labels(n)
+
+
+def _latex_table(
+    header_line: str,
+    body_lines: list[str],
+    col_spec: str,
+    caption: str,
+    label: str,
+    centering: bool = True,
+    double_toprule: bool = False,
+) -> str:
+    """Return a complete LaTeX table* string."""
+    lines = [r"\begin{table*}"]
+    if centering:
+        lines.append(r"  \centering")
+    lines.append(f"  \\begin{{tabular}}{{{col_spec}}}")
+    lines.append(r"      \toprule")
+    if double_toprule:
+        lines.append(r"      \toprule")
+    lines.append("       " + header_line)
+    lines.append(r"      \midrule")
+    lines += ["       " + bl for bl in body_lines]
+    lines.append(r"      \bottomrule")
+    lines.append(r"  \end{tabular}")
+    lines.append(f"  \\caption{{{caption}}}")
+    lines.append(f"  \\label{{{label}}}")
+    lines.append(r"\end{table*}")
+    return "\n".join(lines) + "\n"
+
+
+def tables(criteria: dict) -> None:
+    """
+    Write four LaTeX tables to the data/ directory:
+
+    - ``table_dm.txt``          Decision matrix (fuzzy values).
+    - ``table_weight.txt``      Fuzzy weights per method.
+    - ``table_weight_defu.txt`` Defuzzified weights (%) per method.
+    - ``table_ranking.txt``     TOPSIS and MABAC rankings side-by-side.
+    """
+    (
+        st_weight, st_weight_defu,
+        crt_weight, crt_weight_defu,
+        mrc_weight, mrc_weight_defu,
+        criteria,
+    ) = multi_criteria(RESULTS_CSV, criteria)
+
+    df = pd.read_csv(DECISION_CSV, sep="\t", header=0, index_col=0)
+    col_labels = _make_criteria_labels(len(criteria))
+
+    # ------------------------------------------------------------------
+    # Decision matrix table
+    # ------------------------------------------------------------------
+    fuzzy_cols = [df[c + "_fuzzy"].values for c in criteria]
+    header = " & ".join(rf"\textbf{{{c}}}" for c in col_labels) + r" \\"
+    body   = [
+        " & ".join(str(fuzzy_cols[j][i]) for j in range(len(criteria))) + r" \\"
+        for i in range(len(fuzzy_cols[0]))
+    ]
+    Path("data/table_dm.txt").write_text(
+        _latex_table(header, body, "l" + "r" * len(criteria),
+                     "Decision matrix of configurations",
+                     "tab:decision_matrix_inline",
+                     centering=False),
+        encoding="utf-8",
     )
+    _log_saved("table_dm.txt")
 
-    txt_out.write_text(table, encoding="utf-8")
+    # ------------------------------------------------------------------
+    # Weight tables (fuzzy and defuzzified)
+    # ------------------------------------------------------------------
+    weight_configs = [
+        (
+            "table_weight.txt",
+            [np.round(st_weight, 3), np.round(crt_weight, 3), np.round(mrc_weight, 3)],
+            _WEIGHT_METHODS,
+            "Fuzzy weights determined by methodology.",
+            "tab:all_weights",
+            False,
+        ),
+        (
+            "table_weight_defu.txt",
+            [np.round(st_weight_defu * 100, 3), np.round(crt_weight_defu * 100, 3), np.round(mrc_weight_defu * 100, 3)],
+            [r"St. Variance ($\%$)", r"CRITIC ($\%$)", r"MEREC ($\%$)"],
+            "Defuzzified weights determined by methodology.",
+            "tab:all_weights_defu",
+            False,
+        ),
+    ]
 
-    print("\033[1;4;32mFile 'table_weight_defu.txt' was saved successfully\033[0m")
-    
-    df_st_TOPSIS = pd.read_csv("data/score_total_st_TOPSIS.csv", sep='\t', header=0)
-    
-    df_crt_TOPSIS = pd.read_csv("data/score_total_crt_TOPSIS.csv", sep='\t', header=0)
-    
-    df_mrc_TOPSIS = pd.read_csv("data/score_total_mrc_TOPSIS.csv", sep='\t', header=0)
-    
-    df_st_MABAC = pd.read_csv("data/score_total_st_MABAC.csv", sep='\t', header=0)
-    
-    df_crt_MABAC = pd.read_csv("data/score_total_crt_MABAC.csv", sep='\t', header=0)
-    
-    df_mrc_MABAC = pd.read_csv("data/score_total_mrc_MABAC.csv", sep='\t', header=0)
-    
-    txt_out = Path("data/table_ranking.txt")
-    
-    columns_TOPSIS = []
-    columns_TOPSIS.append(df_st_TOPSIS['Alternative'].values)
-    columns_TOPSIS.append(df_crt_TOPSIS['Alternative'].values)
-    columns_TOPSIS.append(df_mrc_TOPSIS['Alternative'].values)
-    
-    columns_MABAC = []
-    columns_MABAC.append(df_st_MABAC['Alternative'].values)
-    columns_MABAC.append(df_crt_MABAC['Alternative'].values)
-    columns_MABAC.append(df_mrc_MABAC['Alternative'].values)
-    
-    index_name = ['St. Variance', 'CRITIC', 'MEREC']
-        
-    header_cells = [rf"\textbf{{{c}}}" for c in index_name]
-        
-    header_line_1 = r"\multicolumn{4}{c|}{\textbf{TOPSIS}}" + " & " + r"\multicolumn{4}{c}{\textbf{MABAC}}" + r"\\"
-    
-    header_line_2 = " & ".join(header_cells) + " & " + " & ".join(header_cells) + r" \\"
-    
-    body_lines = []
-    for i in range(0, len(columns_TOPSIS[0])):
-        body_lines.append(f" & ".join(str(c[i]) for c in columns_TOPSIS) + " & " + f" & ".join(str(c[i]) for c in columns_MABAC) + r" \\")
-        
-        
-    table = (
-        r"\begin{table*}" + "\n"
-        f"\\begin{{tabular}}{{{'c' * len(index_name)}|{'c' * len(index_name) }}}\n"
-        r"\toprule" + "\n"
-        r"\toprule" + "\n"
-        + header_line_1 + "\n"
-        r"\midrule" + "\n"
-        + header_line_2 + "\n"
-        r"\midrule" + "\n"
-        + "\n".join(body_lines) + "\n"
-        r"\bottomrule" + "\n"
-        r"\end{tabular}" + "\n"
-        r"\caption{Ranking of the alternatives depending on weight-determination method and ranking method.}" + "\n"
-        r"\label{tab:all_rankings}" + "\n"
-        r"\end{table*}" + "\n"
+    for fname, weight_list, method_labels, caption, label, _ in weight_configs:
+        weights_arr = np.array(weight_list)
+        header = (
+            r"\textbf{Criterion} & "
+            + " & ".join(rf"\textbf{{{m}}}" for m in method_labels)
+            + r" \\"
+        )
+        body = [
+            f"{c} & " + " & ".join(str(weights_arr[k, i]) for k in range(3)) + r" \\"
+            for i, c in enumerate(col_labels)
+        ]
+        Path(f"data/{fname}").write_text(
+            _latex_table(header, body, "l" + "c" * (len(method_labels) + 1),
+                         caption, label, double_toprule=True),
+            encoding="utf-8",
+        )
+        _log_saved(fname)
+
+    # ------------------------------------------------------------------
+    # Ranking table (TOPSIS + MABAC side by side)
+    # ------------------------------------------------------------------
+    load = lambda tag, method: pd.read_csv(
+        f"data/score_total_{tag}_{method}.csv", sep="\t", header=0
+    )["Alternative"].values
+
+    topsis_cols = [load(t, "TOPSIS") for t in ("st", "crt", "mrc")]
+    mabac_cols  = [load(t, "MABAC")  for t in ("st", "crt", "mrc")]
+    n_rows      = len(topsis_cols[0])
+
+    header_1 = (
+        r"\multicolumn{4}{c|}{\textbf{TOPSIS}}"
+        " & "
+        r"\multicolumn{4}{c}{\textbf{MABAC}}"
+        r"\\"
     )
+    header_2 = (
+        " & ".join(rf"\textbf{{{m}}}" for m in _WEIGHT_METHODS)
+        + " & "
+        + " & ".join(rf"\textbf{{{m}}}" for m in _WEIGHT_METHODS)
+        + r" \\"
+    )
+    body = [
+        " & ".join(str(c[i]) for c in topsis_cols)
+        + " & "
+        + " & ".join(str(c[i]) for c in mabac_cols)
+        + r" \\"
+        for i in range(n_rows)
+    ]
 
-    txt_out.write_text(table, encoding="utf-8")
-
-    print("\033[1;4;32mFile 'table_ranking.txt' was saved successfully\033[0m")
-    
-    
-
+    n = len(_WEIGHT_METHODS)
+    col_spec = "c" * n + "|" + "c" * n
+    table_str = (
+        r"\begin{table*}" + "\n"
+        + f"\\begin{{tabular}}{{{col_spec}}}\n"
+        + r"\toprule" + "\n"
+        + r"\toprule" + "\n"
+        + header_1 + "\n"
+        + r"\midrule" + "\n"
+        + header_2 + "\n"
+        + r"\midrule" + "\n"
+        + "\n".join(body) + "\n"
+        + r"\bottomrule" + "\n"
+        + r"\end{tabular}" + "\n"
+        + r"\caption{Ranking of the alternatives depending on weight-determination method and ranking method.}" + "\n"
+        + r"\label{tab:all_rankings}" + "\n"
+        + r"\end{table*}" + "\n"
+    )
+    Path("data/table_ranking.txt").write_text(table_str, encoding="utf-8")
+    _log_saved("table_ranking.txt")
