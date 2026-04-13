@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ---------------------------------------------------------------------------
+# Generated data (runtime outputs)
+# ---------------------------------------------------------------------------
+data/results_marcot.csv
+data/Com_fiber_in.txt
+data/Com_fiber_out.txt
+data/decision_matrix.csv
+data/score_total_*.csv
+data/table_*.txt
+
+# Keep input data files
+!data/Commercial_OTA.txt
+!data/Commercial_fibers.txt
+
+# Generated figures
+Figures/*.png
+
+# ---------------------------------------------------------------------------
+# IDE / editors
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# OS
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Jupyter (if used for prototyping)
+# ---------------------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb

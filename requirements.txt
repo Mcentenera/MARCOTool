@@ -1,5 +1,6 @@
-numpy
-pandas
-scipy
-PyQt5
-matplotlib
+PyQt5>=5.15
+numpy>=1.24
+pandas>=2.0
+matplotlib>=3.7
+scipy>=1.11
+seaborn>=0.13
