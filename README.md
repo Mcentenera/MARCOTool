@@ -62,7 +62,7 @@ MARCOTool/
 ## Usage
 
 ```bash
-python main.py
+python MARCOTool.py
 ```
 
 The GUI will open. Set the telescope, fiber, and spectrograph parameters in the tabs, then click **Run**.
