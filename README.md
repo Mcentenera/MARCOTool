@@ -1,5 +1,5 @@
 # MARCOTool
-
+<img width="425" height="405" alt="logo" src="https://github.com/user-attachments/assets/2c81c160-3d46-4318-a2e4-861d03ff7a88" />
 **MARCOTool** (Modular ARray COst Tool) is a GUI application for estimating and optimising the design of modular telescope arrays coupled to photonic lanterns and high-resolution spectrographs.
 
 Given a set of optical and detector parameters, MARCOTool computes:
